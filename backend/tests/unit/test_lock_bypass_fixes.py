@@ -1332,6 +1332,11 @@ class TestIntegrationSearchLockRedaction:
 class TestPromptDataLockFilter:
     """get_prompt_data (shared utility) must exclude locked memories."""
 
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        from utils.llms.memory import _prompt_data_cache
+        _prompt_data_cache.clear()
+
     def test_get_prompt_data_filters_locked_memories(self):
         """get_prompt_data must not include locked memories in prompt context."""
         import database.memories as memories_db
@@ -1363,9 +1368,8 @@ class TestPromptDataLockFilter:
             patch('utils.llms.memory.resolve_memory_system', return_value=MemorySystem.LEGACY),
             patch('utils.llms.memory.get_user_name', return_value='Test'),
         ):
-            from utils.llms.memory import clear_prompt_data_cache, get_prompt_data
+            from utils.llms.memory import get_prompt_data
 
-            clear_prompt_data_cache('test-uid')
             _, baseline, user_made, generated = get_prompt_data('test-uid')
 
         # Only unlocked memory should appear

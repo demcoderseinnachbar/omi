@@ -11,7 +11,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 import database.memories as memories_db
-import utils.llms.memory as llms_memory
 from database.memory_imports import ingest_memory_import_batch
 from database import review_queue
 from database.vector_db import (
@@ -596,7 +595,6 @@ async def create_memory(
         logger.exception("Firestore create_memory failed uid=%s", uid)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
-    llms_memory.clear_prompt_data_cache(uid)
     _finish_memory_parity_capture(parity_capture, [memory_db])
 
     try:
@@ -745,7 +743,6 @@ async def create_memories_batch(
         logger.exception("Firestore save_memories failed uid=%s count=%s", uid, len(memory_dbs))
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
-    llms_memory.clear_prompt_data_cache(uid)
     _finish_memory_parity_capture(parity_capture, memory_dbs)
 
     # Pinecone batch upsert runs on a worker thread (postprocess pool, like the
@@ -1042,7 +1039,6 @@ def delete_memories_batch(
         except CanonicalMemoryNotFoundError:
             raise HTTPException(status_code=404, detail='Memory not found')
         _mirror_delete_into_legacy(uid, memory_ids, db_client=db_client)
-        llms_memory.clear_prompt_data_cache(uid)
         return {'status': 'ok'}
 
     # Legacy cohort: enforce the same per-memory guard as _validate_memory, but via a
@@ -1062,7 +1058,6 @@ def delete_memories_batch(
         delete_memory_vectors_batch(uid, memory_ids)
     except Exception:
         logger.exception("Vector batch delete failed uid=%s count=%d (Firestore already deleted)", uid, len(memory_ids))
-    llms_memory.clear_prompt_data_cache(uid)
     return {'status': 'ok'}
 
 
@@ -1090,7 +1085,6 @@ def delete_memory(
         delete_memory_vector(uid, memory_id)
     except Exception:
         logger.exception("Vector delete failed uid=%s memory_id=%s (Firestore deleted)", uid, memory_id)
-    llms_memory.clear_prompt_data_cache(uid)
     return {'status': 'ok'}
 
 
@@ -1114,7 +1108,6 @@ def delete_memories(
         return {'status': 'ok'}
 
     _purge_legacy_memories(uid)
-    llms_memory.clear_prompt_data_cache(uid)
     return {'status': 'ok'}
 
 
@@ -1133,7 +1126,6 @@ def review_memory(
         return {'status': 'ok'}
     _validate_mutable_memory(uid, memory_id, db_client=db_client)
     memories_db.review_memory(uid, memory_id, value)
-    llms_memory.clear_prompt_data_cache(uid)
     return {'status': 'ok'}
 
 
@@ -1175,7 +1167,6 @@ def edit_memory(
         )
     except Exception:
         logger.exception("Vector upsert failed uid=%s memory_id=%s (memory edited, vector stale)", uid, memory_id)
-    llms_memory.clear_prompt_data_cache(uid)
     return {'status': 'ok'}
 
 
@@ -1205,7 +1196,6 @@ def update_memory_visibility(
         return {'status': 'ok'}
     _validate_mutable_memory(uid, memory_id, db_client=db_client)
     memories_db.change_memory_visibility(uid, memory_id, mutation_value)
-    llms_memory.clear_prompt_data_cache(uid)
     return {'status': 'ok'}
 
 
@@ -1227,6 +1217,5 @@ def update_memory_baseline(
         raise HTTPException(status_code=503, detail='Service temporarily unavailable')
     _validate_mutable_memory(uid, memory_id, db_client=db_client)
     memories_db.update_memory_fields(uid, memory_id, {'is_baseline': value})
-    llms_memory.clear_prompt_data_cache(uid)
     submit_with_context(postprocess_executor, update_personas_async, uid)
     return {'status': 'ok'}

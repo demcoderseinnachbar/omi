@@ -82,17 +82,6 @@ def mem_module():
     return mod
 
 
-@pytest.fixture(autouse=True)
-def clear_prompt_cache(request):
-    if 'mem_module' not in request.fixturenames:
-        yield
-        return
-    mem_module = request.getfixturevalue('mem_module')
-    mem_module.clear_prompt_data_cache()
-    yield
-    mem_module.clear_prompt_data_cache()
-
-
 # ---------------------------------------------------------------------------
 # Model behavioral tests — MemoryDB.is_baseline field
 # ---------------------------------------------------------------------------
@@ -157,6 +146,11 @@ class TestBaselineMemoryInjection:
     patch.object(mem_module, …) and patch.object(mem_module.memories_db, …) are correct.
     """
 
+    @pytest.fixture(autouse=True)
+    def clear_cache(self, mem_module):
+        if hasattr(mem_module, "_prompt_data_cache"):
+            mem_module._prompt_data_cache.clear()
+
     def test_baseline_memory_lands_in_first_bucket(self, mem_module):
         """get_prompt_data must route is_baseline=True memories into the baseline bucket."""
         from utils.memory.memory_system import MemorySystem
@@ -177,23 +171,6 @@ class TestBaselineMemoryInjection:
         assert len(generated) == 1
         assert generated[0].content == 'A regular fact'
         assert len(user_made) == 0
-
-    def test_prompt_data_cache_can_be_invalidated(self, mem_module):
-        from utils.memory.memory_system import MemorySystem
-
-        first = [_raw_memory('Initial fact')]
-        second = [_raw_memory('Updated fact')]
-        with (
-            patch.object(mem_module, 'resolve_memory_system', return_value=MemorySystem.LEGACY),
-            patch.object(mem_module.memories_db, 'get_memories', side_effect=[first, second]),
-            patch.object(mem_module, 'get_user_name', return_value='Alice'),
-        ):
-            _, _, _, generated = mem_module.get_prompt_data('user-1')
-            mem_module.clear_prompt_data_cache('user-1')
-            _, _, _, refreshed = mem_module.get_prompt_data('user-1')
-
-        assert generated[0].content == 'Initial fact'
-        assert refreshed[0].content == 'Updated fact'
 
     def test_manually_added_memory_lands_in_user_bucket(self, mem_module):
         """get_prompt_data must route manually_added=True memories into the user_made bucket."""

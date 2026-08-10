@@ -72,14 +72,6 @@ def _canonical_external_write_enabled_or_fail_closed(uid: str, db_client: Any) -
     return False
 
 
-def _clear_prompt_data_cache(uid: str) -> None:
-    try:
-        from utils.llms.memory import clear_prompt_data_cache
-    except ImportError:
-        return
-    clear_prompt_data_cache(uid)
-
-
 def _read_backend_or_fail_closed(
     uid: str, *, db_client: Any, legacy: "LegacyMemoryBackend", canonical: "CanonicalMemoryBackend"
 ):
@@ -587,27 +579,19 @@ class MemoryService:
         return _legacy_search_memories_mcp(uid, query, limit=limit)
 
     def write(self, uid: str, data: Dict[str, Any]) -> str:
-        result = self._resolve_mutation_backend(uid).write(uid, data)
-        _clear_prompt_data_cache(uid)
-        return result
+        return self._resolve_mutation_backend(uid).write(uid, data)
 
     def write_batch(self, uid: str, items: List[Dict[str, Any]]) -> List[str]:
-        result = self._resolve_mutation_backend(uid).write_batch(uid, items)
-        _clear_prompt_data_cache(uid)
-        return result
+        return self._resolve_mutation_backend(uid).write_batch(uid, items)
 
     def update_content(self, uid: str, memory_id: str, content: str) -> MemoryDB:
-        result = self._resolve_mutation_backend(uid).update_content(uid, memory_id, content)
-        _clear_prompt_data_cache(uid)
-        return result
+        return self._resolve_mutation_backend(uid).update_content(uid, memory_id, content)
 
     def update_visibility(self, uid: str, memory_id: str, visibility: str) -> None:
         self._resolve_mutation_backend(uid).update_visibility(uid, memory_id, visibility)
-        _clear_prompt_data_cache(uid)
 
     def review(self, uid: str, memory_id: str, value: bool) -> None:
         self._resolve_mutation_backend(uid).review(uid, memory_id, value)
-        _clear_prompt_data_cache(uid)
 
     def update_product_fields(
         self,
@@ -617,34 +601,27 @@ class MemoryService:
         tags: Optional[List[str]] = None,
         category: Optional[str] = None,
     ) -> MemoryDB:
-        result = self._resolve_mutation_backend(uid).update_product_fields(
+        return self._resolve_mutation_backend(uid).update_product_fields(
             uid,
             memory_id,
             tags=tags,
             category=category,
         )
-        _clear_prompt_data_cache(uid)
-        return result
 
     def delete(self, uid: str, memory_id: str) -> None:
         self._resolve_mutation_backend(uid).delete(uid, memory_id)
-        _clear_prompt_data_cache(uid)
 
     def delete_all(self, uid: str) -> None:
         self._resolve_mutation_backend(uid).delete_all(uid)
-        _clear_prompt_data_cache(uid)
 
     def delete_default(self, uid: str) -> None:
         self._resolve_mutation_backend(uid).delete_default(uid)
-        _clear_prompt_data_cache(uid)
 
     def retract_conversation_memories(self, uid: str, conversation_id: str) -> Optional[Dict[str, Any]]:
         backend = self._resolve_mutation_backend(uid)
         if backend is self._legacy:
             return None
-        result = retract_conversation_sourced_memories(uid, conversation_id, db_client=self._db_client)
-        _clear_prompt_data_cache(uid)
-        return result
+        return retract_conversation_sourced_memories(uid, conversation_id, db_client=self._db_client)
 
     def replace_conversation_memories(
         self,
@@ -655,14 +632,12 @@ class MemoryService:
         backend = self._resolve_mutation_backend(uid)
         if backend is self._legacy:
             raise RuntimeError("atomic conversation replacement requires canonical memory")
-        result = replace_conversation_sourced_memories(
+        return replace_conversation_sourced_memories(
             uid,
             conversation_id,
             items,
             db_client=self._db_client,
         )
-        _clear_prompt_data_cache(uid)
-        return result
 
     def create_external_memory(
         self,
@@ -687,7 +662,6 @@ class MemoryService:
             committed_id = self._canonical.write(uid, payload)
             item = read_canonical_memory_item(uid, committed_id or memory_db.id, db_client=self._db_client)
             if item is not None:
-                _clear_prompt_data_cache(uid)
                 return memory_item_to_memorydb(item)
             logger.error(
                 "canonical external memory readback missing uid=%s memory_id=%s",
@@ -713,9 +687,7 @@ class MemoryService:
                     uid,
                     memory_db.id,
                 )
-        result = _legacy_memorydb(memory_db)
-        _clear_prompt_data_cache(uid)
-        return result
+        return _legacy_memorydb(memory_db)
 
     def create_external_memory_batch(
         self,
@@ -745,7 +717,6 @@ class MemoryService:
                 else:
                     logger.error("canonical external batch readback missing uid=%s memory_id=%s", uid, memory_id)
                     raise HTTPException(status_code=503, detail="Service temporarily unavailable")
-            _clear_prompt_data_cache(uid)
             return results
 
         _require_legacy_write_guard(uid, self._db_client, consumer=consumer, operation=operation)
@@ -769,9 +740,7 @@ class MemoryService:
                 )
             except Exception:
                 logger.exception("Vector batch upsert failed uid=%s (memories saved, vectors missing)", uid)
-        result = [_legacy_memorydb(memory) for memory in memory_dbs]
-        _clear_prompt_data_cache(uid)
-        return result
+        return [_legacy_memorydb(memory) for memory in memory_dbs]
 
     def delete_external_memory(
         self,
@@ -791,7 +760,6 @@ class MemoryService:
                 self._canonical.delete(uid, memory_id)
             except ValueError:
                 raise HTTPException(status_code=404, detail="Memory not found")
-            _clear_prompt_data_cache(uid)
             return
 
         _require_legacy_write_guard(uid, self._db_client, consumer=consumer, operation=operation)
@@ -806,7 +774,6 @@ class MemoryService:
                 delete_memory_vector(uid, memory_id)
             except Exception:
                 logger.exception("Vector delete failed uid=%s memory_id=%s (Firestore deleted)", uid, memory_id)
-        _clear_prompt_data_cache(uid)
 
     def update_external_memory_content(
         self,
@@ -824,9 +791,7 @@ class MemoryService:
             uid, self._db_client
         ):
             try:
-                result = self._canonical.update_content(uid, memory_id, content)
-                _clear_prompt_data_cache(uid)
-                return result
+                return self._canonical.update_content(uid, memory_id, content)
             except ValueError:
                 raise HTTPException(status_code=404, detail="Memory not found")
 
@@ -852,6 +817,4 @@ class MemoryService:
                     uid,
                     memory_id,
                 )
-        result = _legacy_memorydb(cast(MemoryPayload, memories_db.get_memory(uid, memory_id)))
-        _clear_prompt_data_cache(uid)
-        return result
+        return _legacy_memorydb(cast(MemoryPayload, memories_db.get_memory(uid, memory_id)))
