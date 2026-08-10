@@ -1332,6 +1332,15 @@ class TestIntegrationSearchLockRedaction:
 class TestPromptDataLockFilter:
     """get_prompt_data (shared utility) must exclude locked memories."""
 
+    @pytest.fixture(autouse=True)
+    def clear_cache(self):
+        import sys
+
+        if 'utils.llms.memory' in sys.modules:
+            mod = sys.modules['utils.llms.memory']
+            if hasattr(mod, '_prompt_data_cache'):
+                mod._prompt_data_cache.clear()
+
     def test_get_prompt_data_filters_locked_memories(self):
         """get_prompt_data must not include locked memories in prompt context."""
         import database.memories as memories_db

@@ -134,11 +134,6 @@ class TestBaselineMemoryModel:
 
 
 class TestBaselineMemoryInjection:
-    @pytest.fixture(autouse=True)
-    def clear_cache(self, mem_module):
-        if hasattr(mem_module, "_prompt_data_cache"):
-            mem_module._prompt_data_cache.clear()
-
     """
     Each test patches exactly the three callables that get_prompt_data uses at runtime:
       - resolve_memory_system  → forced to MemorySystem.LEGACY so the legacy read path runs
