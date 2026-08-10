@@ -21,6 +21,14 @@ _prompt_data_cache: TTLCache[str, Tuple[Optional[str], List[MemoryDB], List[Memo
 _prompt_data_cache_lock = threading.Lock()
 
 
+def clear_prompt_data_cache(uid: Optional[str] = None) -> None:
+    with _prompt_data_cache_lock:
+        if uid is None:
+            _prompt_data_cache.clear()
+        else:
+            _prompt_data_cache.pop(uid, None)
+
+
 def get_prompt_memories(uid: str) -> Tuple[Any, str]:
     user_name, baseline_memories, user_made_memories, generated_memories = get_prompt_data(uid)
     memories_str = ''

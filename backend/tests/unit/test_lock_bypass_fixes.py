@@ -1363,8 +1363,9 @@ class TestPromptDataLockFilter:
             patch('utils.llms.memory.resolve_memory_system', return_value=MemorySystem.LEGACY),
             patch('utils.llms.memory.get_user_name', return_value='Test'),
         ):
-            from utils.llms.memory import get_prompt_data
+            from utils.llms.memory import clear_prompt_data_cache, get_prompt_data
 
+            clear_prompt_data_cache('test-uid')
             _, baseline, user_made, generated = get_prompt_data('test-uid')
 
         # Only unlocked memory should appear
