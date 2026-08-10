@@ -1335,6 +1335,7 @@ class TestPromptDataLockFilter:
     @pytest.fixture(autouse=True)
     def clear_cache(self):
         from utils.llms.memory import _prompt_data_cache
+
         _prompt_data_cache.clear()
 
     def test_get_prompt_data_filters_locked_memories(self):
