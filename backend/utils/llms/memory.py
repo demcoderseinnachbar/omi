@@ -1,4 +1,7 @@
+import threading
 from typing import Any, Dict, List, Optional, Tuple
+
+from cachetools import TTLCache
 
 import database.memories as memories_db
 from database._client import db as firestore_db
@@ -9,6 +12,13 @@ from utils.memory.memory_system import MemorySystem, resolve_memory_system
 import logging
 
 logger = logging.getLogger(__name__)
+
+_PROMPT_DATA_CACHE_MAX_SIZE = 1024
+_PROMPT_DATA_CACHE_TTL_SECONDS = 30
+_prompt_data_cache: TTLCache[str, Tuple[Optional[str], List[MemoryDB], List[MemoryDB], List[MemoryDB]]] = TTLCache(
+    maxsize=_PROMPT_DATA_CACHE_MAX_SIZE, ttl=_PROMPT_DATA_CACHE_TTL_SECONDS
+)
+_prompt_data_cache_lock = threading.Lock()
 
 
 def get_prompt_memories(uid: str) -> Tuple[Any, str]:
@@ -59,7 +69,11 @@ def safe_create_memory(memory_data: Dict[str, Any]) -> MemoryDB:
 
 
 def get_prompt_data(uid: str) -> Tuple[Optional[str], List[MemoryDB], List[MemoryDB], List[MemoryDB]]:
-    # TODO: cache this
+    with _prompt_data_cache_lock:
+        cached = _prompt_data_cache.get(uid)
+    if cached is not None:
+        return cached
+
     if resolve_memory_system(uid, db_client=firestore_db) == MemorySystem.CANONICAL:
         existing_memories = [
             memory.model_dump(mode='python')
@@ -86,4 +100,7 @@ def get_prompt_data(uid: str) -> Tuple[Optional[str], List[MemoryDB], List[Memor
             logger.error(f'Error creating memory from memory: {e}')
 
     user_name = get_user_name(uid)
-    return user_name, baseline, user_made, generated
+    result = (user_name, baseline, user_made, generated)
+    with _prompt_data_cache_lock:
+        _prompt_data_cache[uid] = result
+    return result
