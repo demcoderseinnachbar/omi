@@ -83,7 +83,11 @@ def mem_module():
 
 
 @pytest.fixture(autouse=True)
-def clear_prompt_cache(mem_module):
+def clear_prompt_cache(request):
+    if 'mem_module' not in request.fixturenames:
+        yield
+        return
+    mem_module = request.getfixturevalue('mem_module')
     mem_module.clear_prompt_data_cache()
     yield
     mem_module.clear_prompt_data_cache()
