@@ -9,7 +9,7 @@ import json
 
 def get_user_messages_with_bot_name() -> List[str]:
     user_messages_with_bot_name: Dict[str, List[Dict[str, Any]]] = {}
-    uids = get_users_uid()[:20]
+    uids = get_users_uid()
     users_ref = db.collection("users")
     print(len(uids))
 
