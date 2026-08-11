@@ -2,20 +2,69 @@ import json
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 from testing.import_isolation import load_module_fresh, stub_modules
 
 _SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'web.py'
 
 
-def _load_web_module() -> ModuleType:
+class _Document:
+    def __init__(self, data):
+        self._data = data
+
+    def to_dict(self):
+        return self._data
+
+
+class _Collection:
+    def __init__(self, documents):
+        self._documents = documents
+
+    def stream(self):
+        if isinstance(self._documents, BaseException):
+            raise self._documents
+        return iter(_Document(document) for document in self._documents)
+
+
+class _UserDocument:
+    def __init__(self, messages):
+        self._messages = messages
+
+    def collection(self, name):
+        assert name == 'messages'
+        return _Collection(self._messages)
+
+
+class _UsersCollection:
+    def __init__(self, messages_by_uid):
+        self._messages_by_uid = messages_by_uid
+
+    def document(self, uid):
+        return _UserDocument(self._messages_by_uid.get(uid, []))
+
+
+class _Database:
+    def __init__(self, plugin_documents=(), messages_by_uid=None):
+        self._plugin_documents = plugin_documents
+        self._messages_by_uid = messages_by_uid or {}
+
+    def collection(self, name):
+        if name == 'plugins_data':
+            return _Collection(self._plugin_documents)
+        assert name == 'users'
+        return _UsersCollection(self._messages_by_uid)
+
+
+def _load_web_module(plugin_documents=(), messages_by_uid=None) -> ModuleType:
     client = ModuleType('database._client')
     client.get_users_uid = lambda: []
-    client.db = None
+    client.db = _Database(plugin_documents, messages_by_uid)
     with stub_modules({'database._client': client}):
         return load_module_fresh('web_persona_export', str(_SCRIPT))
 
 
-def test_map_plugin_data_by_persona_name_groups_messages_and_injects_uid(tmp_path, monkeypatch):
+def test_map_plugin_data_by_persona_name_groups_plugin_documents_and_injects_uid(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'user_messages_with_bot_name.json').write_text(
         json.dumps(
@@ -27,12 +76,17 @@ def test_map_plugin_data_by_persona_name_groups_messages_and_injects_uid(tmp_pat
         encoding='utf-8',
     )
 
-    _load_web_module().map_plugin_data_by_persona_name()
+    _load_web_module(
+        plugin_documents=[
+            {'name': 'Coach', 'description': 'A coach'},
+            {'name': 'Other', 'description': 'Not referenced'},
+        ]
+    ).map_plugin_data_by_persona_name()
 
     assert json.loads((tmp_path / 'plugin_data_by_persona_name.json').read_text(encoding='utf-8')) == {
         'Coach': [
-            {'botName': 'Coach', 'text': 'first', 'uid': 'uid-1'},
-            {'botName': 'Coach', 'text': 'second', 'uid': 'uid-2'},
+            {'name': 'Coach', 'description': 'A coach', 'uid': 'uid-1'},
+            {'name': 'Coach', 'description': 'A coach', 'uid': 'uid-2'},
         ]
     }
 
@@ -43,3 +97,32 @@ def test_map_plugin_data_by_persona_name_handles_missing_input(tmp_path, monkeyp
     _load_web_module().map_plugin_data_by_persona_name()
 
     assert not (tmp_path / 'plugin_data_by_persona_name.json').exists()
+
+
+def test_get_user_messages_scans_all_users_and_writes_results(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    module = _load_web_module(
+        messages_by_uid={
+            'uid-1': [{'botName': 'Coach', 'text': 'first'}],
+            'uid-2': [{'text': 'ignored'}],
+            'uid-3': [{'botName': 'Coach', 'text': 'third'}],
+        }
+    )
+    module.get_users_uid = lambda: ['uid-1', 'uid-2', 'uid-3']
+
+    assert module.get_user_messages_with_bot_name() == ['uid-1', 'uid-2', 'uid-3']
+    assert json.loads((tmp_path / 'user_messages_with_bot_name.json').read_text(encoding='utf-8')) == {
+        'uid-1': [{'botName': 'Coach', 'text': 'first'}],
+        'uid-3': [{'botName': 'Coach', 'text': 'third'}],
+    }
+
+
+def test_get_user_messages_propagates_worker_failures(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    module = _load_web_module(messages_by_uid={'uid-1': RuntimeError('stream failed')})
+    module.get_users_uid = lambda: ['uid-1']
+
+    with pytest.raises(RuntimeError, match='stream failed'):
+        module.get_user_messages_with_bot_name()
+
+    assert not (tmp_path / 'user_messages_with_bot_name.json').exists()
