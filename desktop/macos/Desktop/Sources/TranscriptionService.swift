@@ -430,6 +430,9 @@ class TranscriptionService: @unchecked Sendable {
     if let entry = APIKeyService.activeBYOKSnapshot[.deepgram] {
       request.setValue(entry.key, forHTTPHeaderField: BYOKProvider.deepgram.headerName)
     }
+    if APIKeyService.isByokActive {
+      request.setValue(APIKeyService.selectedBYOKLLMSelection.rawValue, forHTTPHeaderField: "X-BYOK-LLM-Provider")
+    }
 
     // Create URLSession and WebSocket task
     let configuration = URLSessionConfiguration.default
@@ -736,6 +739,9 @@ extension TranscriptionService {
     request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
     if let entry = APIKeyService.activeBYOKSnapshot[.deepgram] {
       request.setValue(entry.key, forHTTPHeaderField: BYOKProvider.deepgram.headerName)
+    }
+    if APIKeyService.isByokActive {
+      request.setValue(APIKeyService.selectedBYOKLLMSelection.rawValue, forHTTPHeaderField: "X-BYOK-LLM-Provider")
     }
     request.httpBody = audioData
 

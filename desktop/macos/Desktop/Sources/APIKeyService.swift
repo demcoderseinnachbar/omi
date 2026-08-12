@@ -58,6 +58,8 @@ enum BYOKLLMProvider: String, CaseIterable, Identifiable {
   case openai
   case gemini
   case anthropic
+  case chatgpt
+  case grok
 
   var id: String { rawValue }
 
@@ -67,15 +69,26 @@ enum BYOKLLMProvider: String, CaseIterable, Identifiable {
     case .openai: return "OpenAI Direct"
     case .gemini: return "Gemini"
     case .anthropic: return "Anthropic"
+    case .chatgpt: return "ChatGPT"
+    case .grok: return "Grok"
     }
   }
 
-  var provider: BYOKProvider {
+  var provider: BYOKProvider? {
     switch self {
     case .openrouter: return .openrouter
     case .openai: return .openai
     case .gemini: return .gemini
     case .anthropic: return .anthropic
+    case .chatgpt, .grok: return nil
+    }
+  }
+
+  var oauthProvider: LLMOAuthProvider? {
+    switch self {
+    case .chatgpt: return .chatgpt
+    case .grok: return .grok
+    default: return nil
     }
   }
 }
@@ -241,14 +254,18 @@ final class APIKeyService: ObservableObject {
   /// The subscription-bypass gate: when this is true, the user is on the free
   /// plan and we attach their keys to every backend request.
   nonisolated static var isByokActive: Bool {
-    selectedBYOKLLMProvider != nil
+    if selectedBYOKLLMProvider != nil { return true }
+    guard let oauthProvider = selectedBYOKLLMSelection.oauthProvider else { return false }
+    return UserDefaults.standard.bool(forKey: oauthProvider.connectionStorageKey)
+  }
+
+  nonisolated static var selectedBYOKLLMSelection: BYOKLLMProvider {
+    BYOKLLMProvider(rawValue: UserDefaults.standard.string(forKey: .byokLLMProvider) ?? "openrouter") ?? .openrouter
   }
 
   nonisolated static var selectedBYOKLLMProvider: BYOKProvider? {
-    let requested =
-      BYOKLLMProvider(rawValue: UserDefaults.standard.string(forKey: .byokLLMProvider) ?? "openrouter")
-      ?? .openrouter
-    return byokKey(requested.provider) == nil ? nil : requested.provider
+    guard let provider = selectedBYOKLLMSelection.provider else { return nil }
+    return byokKey(provider) == nil ? nil : provider
   }
 
   /// SHA-256 fingerprint of a key, used by the backend to detect when the
