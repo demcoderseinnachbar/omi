@@ -1,7 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, cast
 
-from database._client import get_users_uid, db
+from database._client import get_firestore_client, get_users_uid, db
+from pathlib import Path
 
 
 import json
@@ -38,34 +39,41 @@ def get_user_messages_with_bot_name() -> List[str]:
     return uids
 
 
-def map_plugin_data_by_persona_name() -> None:
+def map_plugin_data_by_persona_name(*, firestore_client: Any = None) -> None:
     try:
         with open("user_messages_with_bot_name.json", "r") as f:
             data = json.load(f)
     except FileNotFoundError:
         print("user_messages_with_bot_name.json not found. Run get_user_messages_with_bot_name() first.")
+        Path("plugin_data_by_persona_name.json").unlink(missing_ok=True)
         return
 
     persona_uids: Dict[str, set[str]] = {}
 
     for uid, messages in data.items():
         for message in messages:
-            bot_name = message.get("botName")
-            if bot_name:
-                persona_uids.setdefault(bot_name, set()).add(uid)
+            plugin_id = message.get("pluginId")
+            if plugin_id:
+                persona_uids.setdefault(plugin_id, set()).add(uid)
 
+    client = firestore_client if firestore_client is not None else get_firestore_client()
     plugin_data_by_persona: Dict[str, List[Dict[str, Any]]] = {}
-    for plugin_document in db.collection("plugins_data").stream():
+    for plugin_document in client.collection("plugins_data").stream():
         raw: object = plugin_document.to_dict()
         plugin_data: Dict[str, Any] = cast(Dict[str, Any], raw) if isinstance(raw, dict) else {}
-        persona_name = plugin_data.get("name")
-        if not isinstance(persona_name, str) or persona_name not in persona_uids:
+        plugin_id = plugin_data.get("id")
+        if not isinstance(plugin_id, str) or plugin_id not in persona_uids:
             continue
-        for uid in sorted(persona_uids[persona_name]):
-            # Include uid in the mapped data to keep track of who the message belongs to
+        for uid in sorted(persona_uids[plugin_id]):
+            # Keep the plugin owner's uid and record the chatting user separately
             plugin_data_with_uid = plugin_data.copy()
-            plugin_data_with_uid["uid"] = uid
-            plugin_data_by_persona.setdefault(persona_name, []).append(plugin_data_with_uid)
+            plugin_data_with_uid["user_uid"] = uid
+            integration = plugin_data_with_uid.get("external_integration")
+            if isinstance(integration, dict) and "mcp_oauth_tokens" in integration:
+                plugin_data_with_uid["external_integration"] = {
+                    key: value for key, value in integration.items() if key != "mcp_oauth_tokens"
+                }
+            plugin_data_by_persona.setdefault(plugin_id, []).append(plugin_data_with_uid)
 
     with open("plugin_data_by_persona_name.json", "w") as f:
         json.dump(plugin_data_by_persona, f, indent=2, default=str)
