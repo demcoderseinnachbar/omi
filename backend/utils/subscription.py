@@ -12,7 +12,7 @@ import database.user_usage as user_usage_db
 from database import redis_db
 from database.announcements import compare_versions
 from models.users import PlanType, SubscriptionStatus, Subscription, PlanLimits, TrialMetadata
-from utils.byok import get_byok_key, get_byok_keys
+from utils.byok import get_byok_key, get_byok_llm_provider, get_byok_keys, has_byok_keys
 from utils.log_sanitizer import sanitize
 from utils.observability.fallback import record_fallback
 import logging
@@ -172,8 +172,12 @@ _BYOK_REQUIRED_PROVIDERS = ("openai", "anthropic", "gemini", "deepgram")
 
 
 def _request_has_llm_byok_key() -> bool:
+    if get_byok_llm_provider() in {'chatgpt', 'grok'}:
+        return has_byok_keys()
     keys = get_byok_keys()
-    return any(keys.get(provider) for provider in ('openrouter', 'openai', 'gemini', 'anthropic'))
+    return any(
+        get_byok_key(provider) or keys.get(provider) for provider in ('openrouter', 'openai', 'gemini', 'anthropic')
+    )
 
 
 def _request_has_all_byok_keys() -> bool:
