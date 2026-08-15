@@ -57,6 +57,22 @@ static volatile bool mic_running = false;
 static K_SEM_DEFINE(mic_stopped_sem, 0, 1);
 static atomic_t mic_stop_req = ATOMIC_INIT(0);
 
+/*
+ * Recording hold: while set, the mic must stay awake regardless of silence.
+ *
+ * A deliberate recording is not the same thing as ambient listening. The AAD
+ * sleep below is right for ambient use -- there is no reason to clock a
+ * microphone through a quiet room -- but a person who has just pressed record
+ * may think for a few seconds before speaking, and the sound that would wake the
+ * hardware is never digitised: the PDM clock is off while it happens. Waking
+ * faster cannot fix that; only not being asleep can.
+ *
+ * Declared outside the AAD guard so the API exists in every configuration; with
+ * AAD compiled out there is no sleep to hold off and the flag simply records
+ * what was asked for.
+ */
+static atomic_t mic_hold = ATOMIC_INIT(0);
+
 #define MAX_FRAMES (MAX_SAMPLE_RATE / 10)
 static int16_t mono_buffer[MAX_FRAMES];
 
@@ -80,7 +96,7 @@ static K_SEM_DEFINE(aad_sem, 0, 1);
 #define AAD_PDM_SETTLE_MS 20
 
 static atomic_t aad_wake_pending = ATOMIC_INIT(0); /* WAKE edge seen by ISR */
-static atomic_t aad_woke = ATOMIC_INIT(0);         /* tell mic ctx it just woke */
+static atomic_t aad_woke = ATOMIC_INIT(0);         /* restart the silence clock in mic ctx */
 static atomic_t aad_in_sleep = ATOMIC_INIT(0);     /* mic is in hardware AAD sleep */
 static atomic_t aad_req_sleep = ATOMIC_INIT(0);    /* silence timer asked to sleep */
 static int64_t aad_last_voice_ms;
@@ -310,6 +326,50 @@ bool mic_is_running()
     return mic_running;
 }
 
+void mic_hold_awake(bool active)
+{
+    /* atomic_set returns the previous value; an unchanged hold must not post a
+     * wake, or a client repeating START would restart the silence clock and
+     * signal the AAD thread for nothing. */
+    const bool was_held = atomic_set(&mic_hold, active ? 1 : 0) != 0;
+    if (was_held == active) {
+        return;
+    }
+
+#ifdef CONFIG_OMI_ENABLE_T5838_AAD
+    if (active) {
+        /* Reuse the wake the ISR would have posted rather than calling
+         * exit_hw_aad() from here: that function belongs to the AAD thread and
+         * touches the PDM, and a second caller would race it. Posting the wake
+         * is correct in all three states -- already awake (the thread finds
+         * aad_in_sleep clear and does nothing, so no needless restart), asleep
+         * (it exits), or mid-entry (it exits the moment entry finishes). */
+        atomic_set(&aad_wake_pending, 1);
+        k_sem_give(&aad_sem);
+    } else {
+        /* Releasing restarts the silence clock instead of inheriting the one
+         * from the recording. During the hold the timer kept running but could
+         * not act, so the firmware never actually observed an un-vetoed silence;
+         * carrying that stale timestamp over would drop the mic into sleep the
+         * instant a quiet recording ended. The contract stays what it always
+         * was: sleep after CONFIG_OMI_VAD_HOLD_MS of silence that the sleep
+         * logic was free to act on.
+         *
+         * Signalled rather than written here. `aad_last_voice_ms` is a 64-bit
+         * value owned by the mic thread; writing it from whichever thread
+         * carries the BLE write would be a torn read waiting to happen. This is
+         * the same handoff `exit_hw_aad()` already uses for the same reason. */
+        atomic_set(&aad_woke, 1);
+    }
+#endif
+    LOG_INF("mic hold %s", active ? "acquired (recording)" : "released");
+}
+
+bool mic_hold_active(void)
+{
+    return atomic_get(&mic_hold) != 0;
+}
+
 bool mic_in_aad_sleep(void)
 {
 #ifdef CONFIG_OMI_ENABLE_T5838_AAD
@@ -362,8 +422,25 @@ static void aad_wake_isr(const struct device *dev, struct gpio_callback *cb, uin
 /* Drop the mic into T5838 hardware AAD sleep (aad thread context). */
 static void enter_hw_aad(void)
 {
+    /* Entry takes over AAD_PDM_SETTLE_MS + CONFIG_OMI_AAD_SETTLE_MS to complete,
+     * and mic_pause() below can block for a read timeout on top of that. A
+     * recording starting inside that window must not find a sleeping mic, so the
+     * hold is checked at both points where nothing has been undone yet. Past the
+     * bit-bang there is no cheap way back: from there the hold relies on the wake
+     * that mic_hold_awake() posts, which the thread loop consumes as soon as this
+     * function returns. */
+    if (atomic_get(&mic_hold)) {
+        return;
+    }
     aad_wake_irq(false); /* mask WAKE during config bit-bang */
     mic_pause();         /* stop PDM peripheral */
+    if (atomic_get(&mic_hold)) {
+        /* Nothing has been reconfigured yet -- only the PDM was stopped, so
+         * restarting it is the whole undo. WAKE stays masked, which is its
+         * normal state while the mic is awake. */
+        mic_resume();
+        return;
+    }
     k_msleep(AAD_PDM_SETTLE_MS);
     pdm_hw_disable();                   /* fully release the CLK pin for bit-banging */
     t5838_aad_enter();                  /* program AAD mode-A + clock into sleep */
@@ -416,7 +493,10 @@ static void aad_thread_fn(void *p1, void *p2, void *p3)
          * stays asleep and adds no idle CPU wakeups. */
         k_sem_take(&aad_sem, K_FOREVER);
 
-        if (atomic_cas(&aad_req_sleep, 1, 0) && !atomic_get(&aad_in_sleep)) {
+        /* Re-check the hold here as well as at the request: the request was made
+         * one mic frame ago and a recording may have started since. */
+        if (atomic_cas(&aad_req_sleep, 1, 0) && !atomic_get(&aad_in_sleep) &&
+            !atomic_get(&mic_hold)) {
             enter_hw_aad();
         }
 
@@ -442,8 +522,10 @@ static void aad_track_silence(const int16_t *buf, size_t n)
     /* Sleep after a long silence whether online or offline. When connected, the
      * BLE link stays up (only the mic + PDM sleep); sound resumes streaming.
      * BUT never sleep while a BLE sync transfer is running: the AAD entry +
-     * conn-param low-power would stall the sync. Defer sleep until it finishes. */
-    if (!atomic_get(&aad_in_sleep) && !storage_transfer_active() &&
+     * conn-param low-power would stall the sync. Defer sleep until it finishes.
+     * The same applies while a client holds the mic for a deliberate recording:
+     * one more veto on the same condition, not a second mechanism. */
+    if (!atomic_get(&aad_in_sleep) && !storage_transfer_active() && !atomic_get(&mic_hold) &&
         (now - aad_last_voice_ms) >= CONFIG_OMI_VAD_HOLD_MS) {
         atomic_set(&aad_req_sleep, 1);
         k_sem_give(&aad_sem);

@@ -74,6 +74,17 @@ static ssize_t audio_codec_read_characteristic(struct bt_conn *conn,
                                                void *buf,
                                                uint16_t len,
                                                uint16_t offset);
+static ssize_t audio_hold_read_characteristic(struct bt_conn *conn,
+                                              const struct bt_gatt_attr *attr,
+                                              void *buf,
+                                              uint16_t len,
+                                              uint16_t offset);
+static ssize_t audio_hold_write_handler(struct bt_conn *conn,
+                                        const struct bt_gatt_attr *attr,
+                                        const void *buf,
+                                        uint16_t len,
+                                        uint16_t offset,
+                                        uint8_t flags);
 static ssize_t settings_dim_ratio_write_handler(struct bt_conn *conn,
                                                 const struct bt_gatt_attr *attr,
                                                 const void *buf,
@@ -140,7 +151,14 @@ static struct bt_uuid_128 audio_characteristic_format_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10002, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
 static struct bt_uuid_128 audio_characteristic_speaker_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10003, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+static struct bt_uuid_128 audio_characteristic_hold_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10004, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
 
+/*
+ * Appended, never inserted. The pusher notifies through
+ * `audio_service.attrs[1]`, so anything added ahead of it would silently point
+ * the audio stream at a different attribute.
+ */
 static struct bt_gatt_attr audio_service_attr[] = {
     BT_GATT_PRIMARY_SERVICE(&audio_service_uuid),
     BT_GATT_CHARACTERISTIC(&audio_characteristic_data_uuid.uuid,
@@ -165,7 +183,12 @@ static struct bt_gatt_attr audio_service_attr[] = {
                            NULL),
     BT_GATT_CCC(audio_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), //
 #endif
-
+    BT_GATT_CHARACTERISTIC(&audio_characteristic_hold_uuid.uuid,
+                           BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                           audio_hold_read_characteristic,
+                           audio_hold_write_handler,
+                           NULL),
 };
 
 static struct bt_gatt_service audio_service = BT_GATT_SERVICE(audio_service_attr);
@@ -354,6 +377,59 @@ static ssize_t audio_codec_read_characteristic(struct bt_conn *conn,
     uint8_t value[1] = {CODEC_ID};
     LOG_DBG("audio_codec_read_characteristic %d", CODEC_ID);
     return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
+}
+
+/*
+ * Recording hold (19B10004): one byte, 1 while a client is deliberately
+ * recording, 0 otherwise.
+ *
+ * Ambient listening should not use it. The microphone sleeps through silence on
+ * purpose, and that is right for a device that listens all day. It is wrong for
+ * the moment a person presses record and then thinks for a second: the sound
+ * that would wake the hardware is never digitised, because the PDM clock is off
+ * while it happens. This says "somebody is recording now" and nothing else.
+ *
+ * Not a setting -- it does not survive the connection that set it. See
+ * `_transport_disconnected`, which releases it, so a client that crashes or
+ * walks out of range cannot leave the microphone clocked forever.
+ */
+static ssize_t audio_hold_read_characteristic(struct bt_conn *conn,
+                                              const struct bt_gatt_attr *attr,
+                                              void *buf,
+                                              uint16_t len,
+                                              uint16_t offset)
+{
+    uint8_t value[1] = {mic_hold_active() ? 1u : 0u};
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, value, sizeof(value));
+}
+
+static ssize_t audio_hold_write_handler(struct bt_conn *conn,
+                                        const struct bt_gatt_attr *attr,
+                                        const void *buf,
+                                        uint16_t len,
+                                        uint16_t offset,
+                                        uint8_t flags)
+{
+    ARG_UNUSED(conn);
+    ARG_UNUSED(attr);
+    ARG_UNUSED(flags);
+
+    if (offset != 0) {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+    }
+    if (len != 1) {
+        LOG_WRN("Invalid length for recording hold write: %u (expected 1)", len);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    const uint8_t requested = ((const uint8_t *) buf)[0];
+    if (requested > 1) {
+        LOG_WRN("Invalid recording hold value: %u", requested);
+        return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+    }
+
+    mic_hold_awake(requested == 1);
+    return len;
 }
 
 static ssize_t audio_data_write_handler(struct bt_conn *conn,
@@ -670,6 +746,12 @@ static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
 {
     k_work_cancel_delayable(&mtu_recheck_work);
     mtu_recheck_attempts = 0;
+
+    /* A recording hold belongs to the connection that asked for it. Releasing it
+     * here is what makes a crashed app, a flat phone or somebody walking out of
+     * range safe: none of them can send a STOP, and without this the microphone
+     * would stay clocked until the battery ran out. */
+    mic_hold_awake(false);
 
     is_connected = false;
 
