@@ -1,0 +1,47 @@
+name: Firmware gates
+
+# Two refusals, both about changes that cannot be undone on shipped hardware.
+#
+# There is no cable to a Shard. The bootloader has downgrade prevention compiled
+# in and cannot be replaced over the air, and a firmware update writes only the
+# application slot. So a forgotten version bump means devices that can never
+# receive the release, and a moved persistent partition means devices that
+# silently lose their stored settings. Neither has a way back.
+#
+# **These only ever refuse.** No file is written, no commit is created, no
+# version or address is chosen for anybody.
+
+on:
+  pull_request:
+    paths:
+      - 'omi/firmware/**'
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version gate compares with the target branch as it stands, so
+          # its tip has to be here. A shallow clone would leave nothing to
+          # compare with.
+          fetch-depth: 0
+
+      - name: Check the rules themselves
+        working-directory: omi/firmware/scripts/ci
+        run: python3 -m unittest --verbose
+
+      - name: Require a version bump for firmware changes
+        run: |
+          python3 omi/firmware/scripts/ci/version_gate.py \
+            "origin/${{ github.base_ref }}"
+
+  # The partition check needs a real build, because the point is not to trust
+  # `pm_static.yml` but to see what the partition manager actually produced.
+  # Wired in wherever the firmware is built; the step is one line:
+  #
+  #   python3 omi/firmware/scripts/ci/partition_gate.py \
+  #     omi/firmware/v2.9.0/build/partitions.yml
+  #
+  # Kept out of this job on purpose — a job that refuses in seconds should not
+  # wait twenty minutes for a toolchain to say the same thing.

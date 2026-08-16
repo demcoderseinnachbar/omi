@@ -1,3 +1,25 @@
+# The firmware version a device reports, derived rather than typed.
+#
+# `$(APPVERSION)` is Zephyr's expansion of the VERSION file — major.minor.
+# patchlevel, composed in cmake/modules/version.cmake and handed to Kconfig by
+# cmake/modules/kconfig.cmake. MCUboot signs the image from the same file
+# through MCUBOOT_IMGTOOL_SIGN_VERSION. **One file decides both**, so the image
+# and the Device Information Service cannot drift apart — which they once did,
+# the image saying 0.0.1 while DIS said "3.0.21", because both were typed by
+# hand and nothing connected them.
+#
+# **It has to live here and not in `omi.conf`.** Kconfig expands `$(...)` while
+# parsing Kconfig files; a `.conf` fragment assigns a literal, so the same text
+# there would put the characters `$(APPVERSION)` into the characteristic and a
+# device would report that as its firmware version.
+#
+# Before `source`, which is the documented way an application overrides a
+# Zephyr default: the first default parsed for a symbol wins, and Kconfig.zephyr
+# brings its own — the tweak form, `0.0.2+0`. The build number belongs to the
+# bootloader; what a device says it is running is the product version.
+config BT_DIS_FW_REV_STR
+	default "$(APPVERSION)"
+
 source "Kconfig.zephyr"
 
 menu "Omi Features Configuration"

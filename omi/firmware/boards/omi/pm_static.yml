@@ -8,6 +8,32 @@ external_flash:
   end_address: 0x200000
   region: external_flash
   size: 0xd0000
+# Pinned, and the addresses are a compatibility contract rather than a layout
+# preference. See SHARD_RELEASES.md.
+#
+# Upstream leaves both of these to the partition manager with the same
+# constraint — `before: [tfm_storage, end]` — and no ordering between them, so
+# two placements are equally valid and which one appears depends on the order
+# the fragments happen to be collected in. That is not a theoretical concern: a
+# Shard already in the field was built with settings first, and a later build of
+# the same source produced them the other way round.
+#
+# A firmware update writes only the application slot. If these addresses move,
+# the new firmware looks for its settings where nothing wrote them — the device
+# silently loses its clock, its microphone gain and its dim ratio. There is no
+# cable to this hardware and no way to put them back.
+#
+# So the values below are the ones already on shipped hardware, not the ones a
+# fresh build happens to choose. `littlefs_storage` is pinned too even though
+# nothing mounts it: its placement decides where `settings_storage` lands.
+#
+# Moving either of these needs a planned storage migration and a product
+# decision, not a rebuild.
+littlefs_storage:
+  address: 0xfa000
+  end_address: 0x100000
+  region: flash_primary
+  size: 0x6000
 mcuboot:
   address: 0x0
   end_address: 0x10000
@@ -94,6 +120,11 @@ rpmsg_nrf53_sram:
     - end
   region: sram_primary
   size: 0x10000
+settings_storage:
+  address: 0xf8000
+  end_address: 0xfa000
+  region: flash_primary
+  size: 0x2000
 sram_primary:
   address: 0x20002000
   end_address: 0x20070000

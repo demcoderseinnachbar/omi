@@ -316,15 +316,41 @@ static struct bt_gatt_attr time_sync_service_attr[] = {
 static struct bt_gatt_service time_sync_service = BT_GATT_SERVICE(time_sync_service_attr);
 
 // Advertisement data
+//
+// The name is deliberately NOT here; it lives in the scan response below.
+//
+// Legacy advertising carries 31 bytes, and this packet already spends 21 of
+// them: flags (3) plus the 128-bit audio service UUID (18). A complete local
+// name costs 2 + strlen, which leaves room for eight characters. "Shard" is
+// five and would fit — the name is kept in the scan response anyway, and that
+// is a decision rather than a leftover.
+//
+// What the eight-character ceiling costs if it is ever crossed:
+// `bt_le_adv_start()` returns -EINVAL, which this file treats as non-fatal and
+// logs as "continuing without BLE". The device would run, record nothing
+// anybody could fetch, and never appear in a scan. It could not be recovered
+// over the air either, because an OTA needs the connection that the missing
+// advertisement prevents. Three spare bytes are not a margin worth spending on
+// a product name, which is the kind of thing that changes.
+//
+// Nothing is lost by the placement. The service UUID stays here, and it is what
+// a scanner filters on — Orb's discovery and its CompanionDeviceManager filter
+// both match on it and never on the name. Android scans actively for the
+// chooser, so the scan response is read as a matter of course. The name decides
+// what is *shown*, not what is *found*.
 static const struct bt_data bt_ad[] = {
     BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
     BT_DATA(BT_DATA_UUID128_ALL, audio_service_uuid.val, sizeof(audio_service_uuid.val)),
-    BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
 };
 
 // Scan response data
+//
+// Answered on an active scan, which is what phones do by default — so the name
+// still reaches a chooser. 16 bytes of the 31 are used: the 16-bit DIS UUID (4)
+// plus the complete local name (2 + 10).
 static const struct bt_data bt_sd[] = {
     BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_DIS_VAL)),
+    BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
 };
 
 //
