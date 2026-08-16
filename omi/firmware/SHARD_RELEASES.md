@@ -179,13 +179,35 @@ release: Shard CV1 v<version>
 asset:   Shard_CV1_appcore_v<version>.zip
 ```
 
-For the current build:
+For the current release:
 
 ```
-tag:     shard-cv1-v0.0.2
-release: Shard CV1 v0.0.2
-asset:   Shard_CV1_appcore_v0.0.2.zip
+tag:     shard-cv1-v0.0.3
+release: Shard CV1 v0.0.3
+asset:   Shard_CV1_appcore_v0.0.3.zip
 ```
+
+### What a tag means
+
+**A firmware tag means released, not frozen.** It is created only after the
+concrete release artefact has been accepted on hardware — not when the source
+looks finished, and not when the build is green.
+
+The reason is the project's own history. Twice an artefact looked complete
+and the hardware said otherwise: a busy device-information read silently
+stopped the firmware check from ever running, and the partition manager moved
+the settings region between two builds of the same source. Neither showed up in
+a build log. A tag that meant "source frozen" would be read as "released" a
+year later by somebody who was not here.
+
+So, in full:
+
+- A **release candidate gets no tag.** Its identity is its artefact hashes.
+- The tag points at **exactly the commit the accepted artefact was built from**.
+- A tag is **never moved** to another commit afterwards.
+- A version number that has been tagged is **never reused for different firmware
+  bytes**. If the bytes change, the version changes.
+- Development commits are not tagged at all.
 
 ### Why this scheme, verified rather than assumed
 
