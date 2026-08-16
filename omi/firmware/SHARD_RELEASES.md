@@ -9,7 +9,9 @@ questions: an Omi release tells the Omi backend what to offer Omi users; a
 Shard release is the archival record of the exact bytes an Orb build
 carries.
 
-**Nothing here is published yet.** See [Status](#status).
+**The current release is `0.0.3`.** It is accepted on hardware and tagged; the
+GitHub release and the archival copy are still outstanding. See
+[Status](#status).
 
 ---
 
@@ -19,11 +21,11 @@ carries.
 |---|---|---|
 | `CONFIG_BT_DEVICE_NAME` | `Omi` | `Shard` |
 | `CONFIG_BT_DIS_MODEL` | `Omi CV 1` | `Shard CV 1` |
-| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | `0.0.2` |
+| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | `0.0.3` |
 
 The version restarts at `0.0.x` deliberately. It is not a continuation of the
 Omi version line — it is a different product identity with its own history, and
-pretending otherwise would make `3.0.21` and `0.0.2` comparable when they are
+pretending otherwise would make `3.0.21` and `0.0.3` comparable when they are
 not.
 
 ### The persistent partitions are pinned, and their addresses are a contract
@@ -69,25 +71,46 @@ python3 scripts/ci/partition_gate.py v2.9.0/build/partitions.yml
 One file decides every version a Shard reports or carries:
 
 ```
-omi/firmware/omi/VERSION
-    ├─ MCUBOOT_IMGTOOL_SIGN_VERSION  →  image header      0.0.2+0
-    ├─ the DFU manifest              →  version_MCUBOOT   0.0.2+0
-    └─ CONFIG_BT_DIS_FW_REV_STR      →  BLE DIS revision  0.0.2
+omi/firmware/omi/VERSION            (0.0.3, VERSION_TWEAK 0)
+    ├─ MCUBOOT_IMGTOOL_SIGN_VERSION  →  image header      0.0.3+0
+    ├─ the DFU manifest              →  version_MCUBOOT   0.0.3+0
+    └─ CONFIG_BT_DIS_FW_REV_STR      →  BLE DIS revision  0.0.3
 ```
 
-The DIS string is **derived, not typed**: `omi.conf` sets
-`CONFIG_BT_DIS_FW_REV_STR="$(APPVERSION)"`, which Zephyr composes from the
-VERSION file in `cmake/modules/version.cmake` and hands to Kconfig in
-`cmake/modules/kconfig.cmake`. MCUboot takes the tweak form from the same file.
+Both derivations are **defaults**, and neither value is typed anywhere.
+
+**The DIS string comes from `omi/firmware/omi/Kconfig`**, which sets
+`config BT_DIS_FW_REV_STR` to `default "$(APPVERSION)"` immediately before
+`source "Kconfig.zephyr"`. `APPVERSION` is Zephyr's expansion of the VERSION
+file, composed in `cmake/modules/version.cmake` and handed to Kconfig in
+`cmake/modules/kconfig.cmake`. The position matters: the first default parsed
+for a symbol wins, so the application's default has to be read before
+`Kconfig.zephyr` brings its own.
+
+> **It cannot live in `omi.conf`, and putting it there was a real defect.**
+> Kconfig expands `$(...)` while parsing **Kconfig files**; a `.conf` fragment
+> assigns a literal string. An earlier attempt wrote
+> `CONFIG_BT_DIS_FW_REV_STR="$(APPVERSION)"` into `omi.conf`, and the generated
+> `.config` carried those thirteen characters verbatim — a device would have
+> advertised `$(APPVERSION)` as its firmware version. It was caught by reading
+> the generated `.config` before the build finished, never reached hardware, and
+> `omi.conf` now carries only a comment saying where the value really comes
+> from.
+
+**The image version comes from an untouched Zephyr default.** Nothing in this
+fork sets `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION`;
+`zephyr/modules/Kconfig.mcuboot` defaults it to `$(APP_VERSION_TWEAK_STRING)`
+whenever `VERSION_MAJOR` is non-empty, which is the same VERSION file in its
+tweak form. That is where the `+0` comes from, and why the image and the DFU
+manifest both read `0.0.3+0` while the DIS reads `0.0.3`.
+
+The two forms differ on purpose: the build number belongs to the bootloader, and
+what a device says it is running is the product version.
 
 That closes a drift this fork actually had: the image once said `0.0.1` while
 the DIS said `3.0.21`, because the two were maintained by hand and nothing
 connected them. A device reported a version describing neither the firmware on
 it nor the one that replaced it.
-
-`APPVERSION` rather than the Zephyr default `$(APP_VERSION_TWEAK_STRING)`: the
-build number belongs to the bootloader, and what a device says it is running is
-the product version.
 
 ### The version must go up, every time
 
@@ -217,7 +240,7 @@ were checked against the source rather than assumed:
 
 1. **The tag does not match.** `FIRMWARE_TAG_PATTERN` is
    `^(?:Omi_CV1|Omi_DK2|OmiGlass|OpenGlass|Friend)_v[0-9]+(?:\.[0-9]+){1,2}$`.
-   `shard-cv1-v0.0.2` fails it — wrong prefix, wrong separator.
+   `shard-cv1-v0.0.3` fails it — wrong prefix, wrong separator.
 2. **The model does not map.** `_get_device_by_model_number` recognises
    `Omi CV 1`, not `Shard CV 1`, and returns `None` for anything else.
 
@@ -234,25 +257,43 @@ mistaken for an Omi OTA asset by anything scanning for the conventional name.
 
 | | |
 |---|---|
-| Size | 190,358 bytes |
-| SHA-256 (archive) | `c9d04ed80cb785a9454ae087684cccc6967b81beb443e9a454b8f4b96b75bc4d` |
-| SHA-256 (image) | `31af0c523672c088ca8c3b9d9e6d9a1d1cec7681866e083c61f9e1aa25fef24e` |
-| Image version | `0.0.2+0` |
+| Asset | `Shard_CV1_appcore_v0.0.3.zip` |
+| Size | 190,352 bytes |
+| Image version | `0.0.3+0` |
+| Signed image size | 249,020 bytes |
 | Toolchain | NCS 2.9.0, sysbuild, MCUboot `OVERWRITE_ONLY` |
+| Signature | RSA-2048, `bootloader/mcuboot/root-rsa-2048.pem`, unchanged from upstream |
+
+### Three hashes, three questions
+
+| Hash | SHA-256 | Answers |
+|---|---|---|
+| Archive | `7d8c5a46188f1f46e5c683aeacd119a2eeb7bc998e471286e280e489b4bb2d95` | is this the same file |
+| Signed image | `5f0e13b3f426acf1a4d2a0804d7959ce15f31120fd020300c413021f71ca46c8` | is this the same signed image |
+| **Payload (image TLV)** | `71165e2e507372da9cd148e762b7a2e2d3e9d9f5afa658081c5eed195b1f6a42` | **is this the same firmware** |
+
+**Only the payload hash survives a rebuild.** MCUboot signs with RSA-PSS, whose
+salt is random, so two builds of byte-identical firmware carry different
+signatures and therefore different image *and* archive hashes. Three builds of
+the `0.0.3` source demonstrated exactly that: identical payload to the byte,
+three different image hashes. Anyone reproducing a Shard build compares the
+payload hash — the SHA-256 MCUboot records in the image's own TLV trailer, taken
+over the payload alone — and nothing else.
+
+The archive hash identifies **this** artefact, and it is the one to archive
+against and the one Orb checks.
 
 ### The binding rule
 
 > **The asset attached to a Shard release and the asset bundled in the Orb
 > app must be byte-for-byte identical.**
 
-Orb records both hashes in `app/lib/devices/firmware/shard_firmware.dart`
-and verifies the archive hash before a single byte reaches a device. An Orb test
-reads the shipped package from disk and hashes it, so the two cannot drift apart
-without the Orb suite failing.
-
-Both hashes are kept because they answer different questions. The archive hash
-changes when the package is repacked; the image hash does not. One alone would
-make "the same firmware" either impossible or meaningless to state.
+Orb records the archive and image hashes in
+`app/lib/devices/firmware/shard_firmware.dart` and verifies the archive hash
+before a single byte reaches a device. An Orb test reads the shipped package
+from disk and hashes it, so the two cannot drift apart without the Orb suite
+failing. Orb does not carry the payload hash: it verifies the file it is about
+to send and then takes the device's own word for what it runs afterwards.
 
 ---
 
@@ -263,39 +304,52 @@ parses. **A Shard release must not carry one.** It is not served to
 anything, and a body in that format would invite a future reader to assume it
 is.
 
-Proposed body for `shard-cv1-v0.0.2`:
+Body for `shard-cv1-v0.0.3`:
 
 ```markdown
-Shard CV 1 — firmware 0.0.2
+Shard CV 1 — firmware 0.0.3
 
-The first Shard build. App core only, from NCS 2.9.0 with sysbuild and MCUboot.
+App core only, from NCS 2.9.0 with sysbuild and MCUboot. Accepted on hardware:
+a Shard running 0.0.2 was updated to this build over the air by Orb, without
+anybody asking it to, and reported `0.0.3` afterwards.
 
-What it changes against the build this fork carried before:
-- BLE device name is `Shard`, carried in the scan response rather than the
-  advertising packet.
-- DIS model number is `Shard CV 1`.
-- DIS firmware revision is `0.0.2`, and it is now the *only* visible version.
-  The previous build reported two different numbers: `0.0.1` in the image and
-  `3.0.21` over the Device Information Service, the latter inherited from stock
-  Omi and never maintained.
+What it changes against 0.0.2:
 
-`0.0.1` never reported a version of its own, so Orb recognises devices running
-it by their manufacturer rather than by a version number. Orb installs this
-build over the air onto both a stock `Omi CV 1` / `Based Hardware` pendant and
-an `Omi CV 1` / `Unicorn Production` one. From here on, `0.0.2` is a revision a
-later release can recognise directly.
+- The version a device reports is derived, not typed. `omi/Kconfig` sets
+  `BT_DIS_FW_REV_STR` to `$(APPVERSION)`, composed by Zephyr from the VERSION
+  file. In 0.0.2 the DIS string was maintained by hand beside the image version
+  and the two could drift.
+- The persistent partitions are pinned. `settings_storage` at `0xF8000` and
+  `littlefs_storage` at `0xFA000` are written down in
+  `boards/omi/pm_static.yml` instead of being chosen by the partition manager.
+  Upstream constrains both identically and orders neither, so two placements
+  were equally valid and one build of the same source moved `settings_storage`
+  to `0xFC000`. A firmware update writes only the application slot; a device
+  whose settings region moves loses its clock, its microphone gain and its dim
+  ratio, and there is no cable to this hardware to put them back.
+- CI refuses instead of reminding: a change reaching the image without a higher
+  VERSION fails, and the generated partition table is checked against the
+  pinned addresses rather than trusted to have been read.
+
+No functional change to recording, BLE transport or audio.
 
 This build is consumed by the Orb app as a bundled asset. It is not served by
 the Omi firmware endpoint and is not offered to Omi users: the tag does not
 match `FIRMWARE_TAG_PATTERN` and the model number does not map to a known
 device.
 
-Installing this build changes what the device identifies itself as. A device
-running it is no longer recognised by the Omi app as an Omi CV 1.
+SHA-256 (archive) 7d8c5a46188f1f46e5c683aeacd119a2eeb7bc998e471286e280e489b4bb2d95
+SHA-256 (image)   5f0e13b3f426acf1a4d2a0804d7959ce15f31120fd020300c413021f71ca46c8
+SHA-256 (payload) 71165e2e507372da9cd148e762b7a2e2d3e9d9f5afa658081c5eed195b1f6a42
 
-SHA-256 (archive) c9d04ed80cb785a9454ae087684cccc6967b81beb443e9a454b8f4b96b75bc4d
-SHA-256 (image)   31af0c523672c088ca8c3b9d9e6d9a1d1cec7681866e083c61f9e1aa25fef24e
+Only the payload hash survives a rebuild — MCUboot signs with RSA-PSS and its
+salt is random.
 ```
+
+The note about identity that `0.0.2` carried — that installing it changes what
+the device calls itself, and that the Omi app no longer recognises it — belongs
+to that release and is not repeated here. `0.0.3` replaces a Shard with a
+Shard.
 
 ---
 
@@ -305,38 +359,90 @@ Not via `firmware_release.yml`. That workflow names the asset `Omi_CV1_OTA_v…`
 and publishes an `Omi_CV1_v…` release with a `KEY_VALUE` body — all three of
 which are exactly what a Shard release must not do.
 
-The steps, when a release is authorised:
+The steps, when a release is authorised — written for `0.0.3`, and the same
+shape for every version after it:
 
-1. Confirm the working tree matches the build: `omi.conf`, `VERSION` and
-   `src/lib/core/transport.c`.
-2. Confirm the archive's SHA-256 matches the value above **and** the value in
-   Orb's firmware registry.
-3. Create the annotated tag `shard-cv1-v0.0.2`.
-4. Create the GitHub release from that tag with the body in section 4.
-5. Attach `Shard_CV1_appcore_v0.0.2.zip`.
+1. Confirm the artefact has been **accepted on hardware**. A tag means released;
+   a release candidate gets none.
+2. Confirm the working tree is clean at the commit the artefact was built from.
+3. Confirm the archive's SHA-256 matches the value in section 3 **and** the
+   value in Orb's firmware registry.
+4. Create the annotated tag `shard-cv1-v0.0.3` **on that commit explicitly**,
+   not on `HEAD`. Later commits on the branch are not part of the release.
+5. Verify the dereferenced tag: `git rev-parse shard-cv1-v0.0.3^{commit}` must
+   equal the build commit.
+6. Push the branch and the tag. No force, no other tags.
+7. Create the GitHub release from that tag with the body in section 4, named
+   `Shard CV1 v0.0.3`.
+8. Attach `Shard_CV1_appcore_v0.0.3.zip` — the accepted artefact itself. Never
+   a rebuild: a rebuild produces a different signature and therefore a different
+   archive hash, and the hash recorded here would no longer identify what was
+   attached.
+9. Archive the artefact, its manifest and its `SHA256SUMS`.
 
 ---
 
 ## Status
 
-Prepared, **not published**.
+### 0.0.3 — **released, archive pending**
 
-- No tag has been created.
-- No GitHub release exists.
-- No asset has been uploaded.
-- The firmware changes are in the working tree and are **not committed**.
+Not "complete". The process in section 5 has nine steps and two of them are
+outstanding, so the release is not finished, and saying otherwise would leave a
+later reader believing an artefact is archived that is not.
 
-Changed in this fork for 0.0.2:
+| Step | State |
+|---|---|
+| Accepted on hardware | **done** |
+| Committed | **done** — `935ff3dbaff98d95c0922d572aa5f32d0e4ca46e` |
+| Annotated tag `shard-cv1-v0.0.3` | **done**, pointing exactly at `935ff3db…` |
+| Tag pushed | **done** — verified remotely, `refs/tags/shard-cv1-v0.0.3^{}` = `935ff3db…` |
+| GitHub release `Shard CV1 v0.0.3` | **outstanding** |
+| Asset uploaded | **outstanding** |
+| Archived | **outstanding** |
 
-```
-M  omi/firmware/omi/omi.conf                    device name, model, version
-M  omi/firmware/omi/VERSION                     image version
-M  omi/firmware/omi/src/lib/core/transport.c    name in the scan response
-M  omi/firmware/AGENTS.md                       pointer to this file
-?  omi/firmware/SHARD_RELEASES.md               this file
-```
+The tag is on the build commit and not on the branch head. Later commits — this
+document among them — sit after it on `feat/shard-recording-hold` and are not
+part of the release. **The tag is never moved to include them.**
+
+The firmware for `0.0.3` is frozen. Anything further changes a version number
+first.
+
+#### Hardware acceptance
+
+`0.0.2` → `0.0.3` over Orb's automatic OTA path, on a Samsung Galaxy A25
+(SM-A256B), started by opening the app. Orb read the device, decided
+`shouldUpdate` on its own, uploaded once, waited out one reboot, reconnected and
+verified against a **fresh** device-information read — model, manufacturer and
+firmware revision all had to match before it reported success. The device
+reported `0.0.3` afterwards, and the clock sync that follows succeeded, which
+means `settings_storage` is where it was pinned and is writable.
+
+What was **not** measured, and is therefore not claimed:
+
+- **`mic_gain` and `dim_ratio` were not read.** No product or diagnostic path
+  exposes them and none was built for the test. That they survived is a
+  reasonable expectation from the partition addresses holding, not an
+  observation.
+- **The battery gate is unverified on hardware.** The run happened with the
+  pendant on external power. Still open: an OTA below and above the 60 %
+  threshold without external power, and a device that will not report its charge
+  at all. Testable again with the next release, not on this device — it now runs
+  the expected revision and has nothing to receive.
+- **The LED was not observed.**
+
+Separately open and unaffected by this release: the pendant's **haptic feedback
+is not perceptible**, and **SMP over BLE is unauthenticated**
+(`CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW=y`) — the image signature is the trust
+boundary, not the transport.
+
+### 0.0.2
+
+Superseded by `0.0.3`. It was never tagged and never published: the tag
+convention was settled after it shipped to hardware, and by then `0.0.3` was the
+next release rather than a retrospective one. Devices provisioned with it are
+recognised by the release line in Orb's firmware registry.
+
+### A note on `prj.conf`
 
 The build writes `omi/firmware/omi/prj.conf` as a copy of `omi.conf`. It is a
-build artefact and is not part of the change.
-
-No device has yet received this build over the air.
+build artefact, is git-ignored, and is never part of a change.
