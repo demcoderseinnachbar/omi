@@ -581,10 +581,40 @@ What was **not** measured, and is therefore not claimed:
   the expected revision and has nothing to receive.
 - **The LED was not observed.**
 
-Separately open and unaffected by this release: the pendant's **haptic feedback
-is not perceptible**, and **SMP over BLE is unauthenticated**
-(`CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW=y`) — the image signature is the trust
-boundary, not the transport.
+Separately open and unaffected by this release: **SMP over BLE is
+unauthenticated** (`CONFIG_MCUMGR_TRANSPORT_BT_PERM_RW=y`) — the image signature
+is the trust boundary, not the transport.
+
+#### The haptic feedback, corrected
+
+The manifest attached to this release says the pendant's haptic feedback is not
+perceptible. **That was the observation at the time and the manifest is not
+changed** — a published release artefact records what was seen when it was
+published. Later observation on the same firmware says something different, and
+this is where that belongs.
+
+**The haptics work.** On 2026-08-16 both confirmations were felt through the
+real product path — a button press started a recording with a short pulse, a
+second press ended it with a longer one, the two were told apart by a person,
+and the recording transcribed. Nothing was flashed or changed to get there.
+
+**The same pendant is also inconsistent.** Within the same hour it produced no
+perceptible pulse at all, then both pulses correctly, then nothing again —
+including the **boot buzz**, which runs before any Bluetooth and involves no app.
+The firmware bytes were identical throughout.
+
+**No cause is claimed.** Not the motor, not a contact, not the firmware, not the
+app, not a power cycle, not the case. None of them is supported by evidence, and
+naming one would turn a guess into a record. What *is* established is that every
+layer above the GPIO register was verified in the same session: 28 writes
+answered with `GATT_SUCCESS`, the correct service and value, `motor_pin` present
+in the generated devicetree, no pin conflict, and `haptic_init()` succeeding.
+
+**There is exactly one pendant.** A single unit cannot distinguish a fault of
+this specimen from a general hardware trait or from some other state-dependent
+effect. **The next diagnostic step is a second pendant**, compared under
+comparable conditions. Until one exists the investigation stays closed — further
+measurement on one device would produce more observations and no more certainty.
 
 ### 0.0.2
 
