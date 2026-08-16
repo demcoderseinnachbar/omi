@@ -9,9 +9,39 @@ questions: an Omi release tells the Omi backend what to offer Omi users; a
 Shard release is the archival record of the exact bytes an Orb build
 carries.
 
-**The current release is `0.0.3`.** It is accepted on hardware and tagged; the
-GitHub release and the archival copy are still outstanding. See
-[Status](#status).
+**This file is the source of truth for the Shard release process.** Other
+documents point here rather than restating it, so that there is one place to
+change when the process changes.
+
+---
+
+## 0. The short version
+
+> **A GitHub release in this fork is the only official archive of a published
+> Shard firmware. There is no second one.**
+
+No separate archive, no mirrored copy on a drive or a file share, and no
+archiving step after the release is published. A release that is published and
+verified is finished. Anything kept elsewhere is a working copy, and a working
+copy is not a record — it is something that can quietly disagree with the
+record.
+
+The ten questions this file exists to answer:
+
+| | Question | Answer | Detail |
+|---|---|---|---|
+| 1 | When must the version go up? | When a change reaches the image. Documentation-only changes do not. CI refuses, it does not remind. | [§1](#the-version-must-go-up-every-time) |
+| 2 | When may a tag be created? | Only after the concrete artefact has been **accepted on hardware**. A candidate gets no tag. | [§2](#what-a-tag-means) |
+| 3 | What must the tag point at? | Exactly the commit the accepted artefact was built from — never the branch head. Tags are never moved. | [§2](#what-a-tag-means) |
+| 4 | When may the GitHub release be published? | From the existing tag, after it is pushed and its dereferenced target verified. | [§5](#5-publishing) |
+| 5 | Which files make a complete release? | Exactly three: the package, `RELEASE_MANIFEST.md`, `SHA256SUMS`. | [§3](#the-release-is-three-files) |
+| 6 | What is Orb's bundled asset? | The delivery copy its automatic update path needs — **not** an archive. | [§3](#what-orbs-asset-is-and-what-it-is-not) |
+| 7 | Which hash answers which question? | Archive hash: is this the same file. Image hash: the same signed image. Payload hash: the same firmware. | [§3](#three-hashes-three-questions) |
+| 8 | How is a release verified after upload? | Download it back read-only, `sha256sum -c SHA256SUMS`, compare Orb's copy byte for byte. | [§5](#verifying-a-release-after-upload) |
+| 9 | What is the single source of truth? | The GitHub release. | this section |
+| 10 | How is an RC or a rebuild kept out? | Never trust a filename. Full path, hash before upload, hash the download after. | [§5](#never-publish-an-rc-or-a-rebuild) |
+
+**The current release is `0.0.3`.** See [Status](#status).
 
 ---
 
@@ -251,7 +281,58 @@ mistaken for an Omi OTA asset by anything scanning for the conventional name.
 
 ---
 
-## 3. What the package contains
+## 3. What a release contains
+
+### The release is three files
+
+A published release carries exactly these, and together they *are* the release:
+
+| File | Answers |
+|---|---|
+| `Shard_CV1_appcore_v<version>.zip` | the firmware itself |
+| `RELEASE_MANIFEST.md` | what it is, where it came from, what was proven and what was not |
+| `SHA256SUMS` | whether a download arrived intact |
+
+`SHA256SUMS` lists at minimum the package and the manifest, in the format
+`sha256sum` writes and reads, so that anybody who downloads a release can check
+it with a standard tool and no instructions:
+
+```
+sha256sum -c SHA256SUMS
+```
+
+or, on Windows without a POSIX shell:
+
+```powershell
+Get-FileHash Shard_CV1_appcore_v<version>.zip, RELEASE_MANIFEST.md -Algorithm SHA256 |
+  Format-List Path, Hash
+```
+
+It does not list itself, and nothing else lists it either: a file cannot contain
+its own hash, and the manifest cannot carry it because `SHA256SUMS` already
+carries the manifest's. The chain ends at the release page, which is the trusted
+point — that is what "single source of truth" buys.
+
+### What Orb's asset is, and what it is not
+
+Orb bundles the same package under `app/assets/firmware/`. **That copy is not a
+second archive.** It is the delivery copy Orb's automatic update path needs at
+runtime, because Orb speaks to no server about firmware and the bytes have to be
+in the app.
+
+| | |
+|---|---|
+| **GitHub release** | the official archive and the source of truth |
+| **Orb's bundled asset** | the delivery copy for the automatic OTA path |
+
+For a published version the two must be **byte-for-byte identical**, and the
+archive SHA-256 recorded in `app/lib/devices/firmware/shard_firmware.dart` must
+equal the one attached to the release. **A difference is a release error, not a
+variant** — one of the two is then not the firmware anybody signed off, and
+there is no way to tell which from the outside. An Orb test reads the shipped
+package from disk and hashes it, so the two cannot drift apart silently.
+
+### What the package contains
 
 **App core only.** No net core.
 
@@ -280,20 +361,18 @@ three different image hashes. Anyone reproducing a Shard build compares the
 payload hash — the SHA-256 MCUboot records in the image's own TLV trailer, taken
 over the payload alone — and nothing else.
 
-The archive hash identifies **this** artefact, and it is the one to archive
-against and the one Orb checks.
+The archive hash identifies **this** artefact. It is what the release is
+recorded under and what Orb verifies before a single byte reaches a device.
 
-### The binding rule
+Orb carries the archive and image hashes, not the payload hash: it checks the
+file it is about to send, and afterwards takes the device's own word for what it
+runs. The payload hash is for whoever asks whether two builds are the same
+firmware, which is a question about sources rather than about a download.
 
-> **The asset attached to a Shard release and the asset bundled in the Orb
-> app must be byte-for-byte identical.**
-
-Orb records the archive and image hashes in
-`app/lib/devices/firmware/shard_firmware.dart` and verifies the archive hash
-before a single byte reaches a device. An Orb test reads the shipped package
-from disk and hashes it, so the two cannot drift apart without the Orb suite
-failing. Orb does not carry the payload hash: it verifies the file it is about
-to send and then takes the device's own word for what it runs afterwards.
+**Do not use the archive or image hash to claim two builds contain the same
+firmware.** They cannot answer that, and stating it that way would be wrong in
+the one direction that matters: two honest rebuilds look different, so an
+inequality would be read as tampering when it is only a new salt.
 
 ---
 
@@ -359,36 +438,99 @@ Not via `firmware_release.yml`. That workflow names the asset `Omi_CV1_OTA_v…`
 and publishes an `Omi_CV1_v…` release with a `KEY_VALUE` body — all three of
 which are exactly what a Shard release must not do.
 
-The steps, when a release is authorised — written for `0.0.3`, and the same
-shape for every version after it:
+### The process, end to end
 
-1. Confirm the artefact has been **accepted on hardware**. A tag means released;
-   a release candidate gets none.
-2. Confirm the working tree is clean at the commit the artefact was built from.
-3. Confirm the archive's SHA-256 matches the value in section 3 **and** the
-   value in Orb's firmware registry.
-4. Create the annotated tag `shard-cv1-v0.0.3` **on that commit explicitly**,
-   not on `HEAD`. Later commits on the branch are not part of the release.
-5. Verify the dereferenced tag: `git rev-parse shard-cv1-v0.0.3^{commit}` must
-   equal the build commit.
-6. Push the branch and the tag. No force, no other tags.
-7. Create the GitHub release from that tag with the body in section 4, named
-   `Shard CV1 v0.0.3`.
-8. Attach `Shard_CV1_appcore_v0.0.3.zip` — the accepted artefact itself. Never
-   a rebuild: a rebuild produces a different signature and therefore a different
-   archive hash, and the hash recorded here would no longer identify what was
-   attached.
-9. Archive the artefact, its manifest and its `SHA256SUMS`.
+Fifteen steps, written for `<version>` and the same shape every time. Nothing
+follows step 15 — **there is no archiving step after the release**, because the
+release *is* the archive.
+
+**Build and prove**
+
+1. Develop the firmware change.
+2. Raise `VERSION` in the same change, once, deliberately. §1 says when this is
+   required; a documentation-only change is not.
+3. Build and run the gates: `build-cv1.sh`, then `version_gate.py` and
+   `partition_gate.py` against the **generated** `partitions.yml`.
+4. Produce the release candidate. **It gets no tag** — its identity is its
+   hashes.
+5. Point Orb at exactly this artefact: the package into `app/assets/firmware/`,
+   the version, image version and archive hash into the firmware registry.
+6. Run Orb's gates — analyzer, tests, and the test that hashes the shipped
+   package.
+7. Run the controlled hardware acceptance on a named device. Record what it
+   proved **and what it did not**.
+
+**Release**
+
+8. Fix the release commit: the commit the accepted artefact was built from, with
+   a clean tree.
+9. Create the annotated tag `shard-cv1-v<version>` **on that commit explicitly**,
+   never on `HEAD`, then verify it:
+   `git rev-parse shard-cv1-v<version>^{commit}` must equal the release commit.
+   Push branch and tag — no force, no other tags.
+10. Create the GitHub release **from the existing tag** — select it, never type a
+    new one — named `Shard CV1 v<version>`, with the body from §4.
+11. Attach exactly the three files from §3. The package is the accepted artefact
+    itself, never a rebuild: a rebuild carries a different signature and
+    therefore a different archive hash, and the hash recorded here would stop
+    identifying what was attached.
+
+**Verify what was published**
+
+12. Download the assets back from GitHub, read-only. Not the local copies — the
+    published bytes.
+13. Run `sha256sum -c SHA256SUMS` against what was downloaded. Both lines must
+    read `OK`.
+14. Compare Orb's bundled package with the downloaded one **byte for byte**
+    (`cmp`), not by name and not by size.
+15. Only then: **`RELEASE COMPLETE`**.
+
+Until every step is done the release is not finished, and the status says so.
+Rounding up here is how somebody a year from now comes to believe a file exists
+that never did.
+
+### Verifying a release after upload
+
+Step 12 to 14 in full, for `0.0.3`:
+
+```bash
+gh release download shard-cv1-v0.0.3 --repo demcoderseinnachbar/omi -D verify/
+# or, with no gh:
+curl -sL -O https://github.com/demcoderseinnachbar/omi/releases/download/shard-cv1-v0.0.3/Shard_CV1_appcore_v0.0.3.zip
+cd verify && sha256sum -c SHA256SUMS
+cmp Shard_CV1_appcore_v0.0.3.zip ../../Orb/app/assets/firmware/Shard_CV1_appcore_v0.0.3.zip
+```
+
+Verifying the local copy proves nothing about the release. What was uploaded is
+the only thing anybody else will ever get.
+
+### Never publish an RC or a rebuild
+
+**Release candidates and rebuilds carry the same filename as the release.** This
+is not hypothetical — during `0.0.3` a candidate named
+`Shard_CV1_appcore_v0.0.3.zip` sat on disk alongside the release with a
+different hash and a six-byte size difference. Nothing about the name tells them
+apart, and a file picker shows the name.
+
+So, every time:
+
+- Address the file by its **full path**, never by name from a search result.
+- **Hash it before uploading** and compare with the manifest.
+- **Hash the download afterwards.** That closes the loop the first two cannot:
+  it checks what arrived at GitHub, not what was meant to.
+
+A wrong artefact under a right version number cannot be corrected by replacing
+it, because the version has already been published for other bytes. It costs a
+new version.
 
 ---
 
 ## Status
 
-### 0.0.3 — **released, archive pending**
+### 0.0.3 — **`RELEASE COMPLETE`**
 
-Not "complete". The process in section 5 has nine steps and two of them are
-outstanding, so the release is not finished, and saying otherwise would leave a
-later reader believing an artefact is archived that is not.
+Every step of §5 is done and verified against what was actually published, not
+against the local copies. Nothing follows.
 
 | Step | State |
 |---|---|
@@ -396,9 +538,18 @@ later reader believing an artefact is archived that is not.
 | Committed | **done** — `935ff3dbaff98d95c0922d572aa5f32d0e4ca46e` |
 | Annotated tag `shard-cv1-v0.0.3` | **done**, pointing exactly at `935ff3db…` |
 | Tag pushed | **done** — verified remotely, `refs/tags/shard-cv1-v0.0.3^{}` = `935ff3db…` |
-| GitHub release `Shard CV1 v0.0.3` | **outstanding** |
-| Asset uploaded | **outstanding** |
-| Archived | **outstanding** |
+| GitHub release `Shard CV1 v0.0.3` | **done** — id `371269673`, published `2026-08-16T08:14:43Z`, not a draft, not a pre-release |
+| `Shard_CV1_appcore_v0.0.3.zip` attached | **done** — verified `7d8c5a46…` |
+| `RELEASE_MANIFEST.md` attached | **done** — verified `132bd363…` |
+| `SHA256SUMS` attached | **done** — verified `29da7427…` |
+| `sha256sum -c SHA256SUMS` on the download | **done** — both `OK` |
+| Orb delivery copy identical to the published package | **done** — `cmp`, byte-identical |
+
+Release: https://github.com/demcoderseinnachbar/omi/releases/tag/shard-cv1-v0.0.3
+
+All three hashes were taken from files **downloaded back from GitHub**, not from
+the copies they were uploaded from. That is the whole point of steps 12 to 14:
+the local file only ever proves what was meant to be published.
 
 The tag is on the build commit and not on the branch head. Later commits — this
 document among them — sit after it on `feat/shard-recording-hold` and are not

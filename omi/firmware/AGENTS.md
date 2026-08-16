@@ -21,6 +21,12 @@ asset scheme, and is deliberately invisible to the Omi firmware endpoint.
 Read [`SHARD_RELEASES.md`](./SHARD_RELEASES.md) before touching
 `omi.conf`, `VERSION` or `src/lib/core/transport.c`.
 
+**It is also the source of truth for the Shard release process** — versioning,
+tagging, publishing and verification. **A GitHub release in this fork is the
+only official archive of a published Shard firmware**; there is no second one
+and no archiving step after it. Do not restate the process here or elsewhere;
+change it there.
+
 **Shard devices are updated over the air and only over the air.** There is no
 wired access to this hardware, and no product path may assume one. What follows
 from that is not optional:
@@ -41,9 +47,15 @@ from that is not optional:
   without a planned migration. `scripts/ci/partition_gate.py` checks the
   generated `partitions.yml` after a build, not just the pinning file.
 - **`omi/firmware/omi/VERSION` is the only version there is.** MCUboot, the DFU
-  manifest and the BLE DIS revision are all derived from it —
-  `CONFIG_BT_DIS_FW_REV_STR="$(APPVERSION)"`, never a typed number. Do not
-  reintroduce a second place to maintain.
+  manifest and the BLE DIS revision are all derived from it, never typed. The
+  DIS string comes from a `default "$(APPVERSION)"` on `BT_DIS_FW_REV_STR` in
+  **`omi/firmware/omi/Kconfig`**, before `source "Kconfig.zephyr"`; MCUboot takes
+  the tweak form from the same file through an untouched Zephyr default. **It
+  cannot go in `omi.conf`** — Kconfig expands `$(...)` only while parsing Kconfig
+  files, so a `.conf` fragment assigns the literal text and a device advertises
+  `$(APPVERSION)` as its firmware version. That was tried and caught before it
+  shipped. Do not reintroduce a second place to maintain, and do not move it
+  back.
 - **Shard image versions only ever go up, and CI enforces it.** A release whose
   image version is not higher than its predecessor's cannot be installed on a
   device running that predecessor — the bootloader refuses it and nothing can
