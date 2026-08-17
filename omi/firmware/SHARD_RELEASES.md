@@ -96,6 +96,10 @@ effect is not the same as seeing the effect. Run it after any firmware build:
 python3 scripts/ci/partition_gate.py v2.9.0/build/partitions.yml
 ```
 
+`.github/workflows/firmware_build_check.yml` runs it on every firmware change,
+so a moved partition fails the commit that moved it rather than the release that
+would have carried it to a device.
+
 ### `VERSION` is the only source of truth
 
 One file decides every version a Shard reports or carries:

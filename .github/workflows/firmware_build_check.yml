@@ -1,0 +1,59 @@
+name: Firmware build check
+
+# Does the Shard firmware still build, and did the persistent partitions stay
+# where shipped hardware has them?
+#
+# That is the whole job. It publishes nothing, tags nothing, uploads nothing and
+# reads no secret — a green run means the source builds, and means nothing about
+# whether the result may be given to a device. What a release requires is in
+# `omi/firmware/SHARD_RELEASES.md`, and hardware acceptance is the part no
+# workflow can do.
+#
+# The build itself lives in `.github/actions/build-shard-firmware`, so this file
+# decides only *when* to run it.
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths:
+      - 'omi/firmware/**'
+      # Change how the build is run and the build has to run.
+      - '.github/workflows/firmware_build_check.yml'
+      - '.github/actions/build-shard-firmware/action.yml'
+  pull_request:
+    paths:
+      - 'omi/firmware/**'
+      - '.github/workflows/firmware_build_check.yml'
+      - '.github/actions/build-shard-firmware/action.yml'
+
+# Reads the checkout, and that is all it is entitled to.
+permissions:
+  contents: read
+
+# A second push should not leave the first one burning a runner for half an
+# hour to answer a question about code nobody is on any more.
+concurrency:
+  group: firmware-build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Shard application core (nRF5340)
+    runs-on: ubuntu-latest
+    # Cold, the build is ~25 minutes. The default ceiling is six hours, which is
+    # what a hung toolchain would happily spend.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before the long part, and deliberately also on `push` where
+      # `firmware_version_gate.yml` does not run: the build below trusts
+      # `partition_gate.py` to notice a moved settings region. A broken gate
+      # that reports success is worse than no gate, and this is the cheapest
+      # place to find out.
+      - name: Check the gates themselves
+        working-directory: omi/firmware/scripts/ci
+        run: python3 -m unittest --verbose
+
+      - name: Build and check the partitions
+        uses: ./.github/actions/build-shard-firmware
