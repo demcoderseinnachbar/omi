@@ -442,6 +442,38 @@ Not via `firmware_release.yml`. That workflow names the asset `Omi_CV1_OTA_v…`
 and publishes an `Omi_CV1_v…` release with a `KEY_VALUE` body — all three of
 which are exactly what a Shard release must not do.
 
+### What CI does, and what it never does
+
+`.github/workflows/shard_release_candidate.yml` does the mechanical half. When
+`VERSION` rises on `main` it builds in the pinned container, runs the partition
+gate against the generated table, and assembles the three files of §3 into a
+**draft release** — every hash read back out of the file that was uploaded, from
+that build and no other.
+
+**It stops there, and the reason is §2.** A tag means released, not built, and a
+draft carries no tag until somebody publishes it. That is precisely the state
+this section requires of a candidate: no tag, identity by hashes. What CI cannot
+do is the half that earns the tag — put the bytes on a device and watch what
+happens.
+
+So it never publishes, never tags, never writes a version, never touches `main`,
+and never decides that a build is a release. The steps below are unchanged; what
+changed is that steps 3 and 4 are now performed by a machine that cannot forget
+one.
+
+**A draft the branch moves past is marked, never replaced.** If the firmware
+changes again while `VERSION` stays where it is, the draft under that number
+holds bytes `main` no longer has — and the release page would say nothing about
+it at the moment somebody presses publish. So CI retitles it `SUPERSEDED — …`,
+puts a warning at the top of its body naming both the commit it was built from
+and the one that overtook it, and fails the run.
+
+It does not delete the draft and does not rebuild it. A candidate may be on a
+device at that moment, and discarding the artefact somebody is testing is the
+worse mistake. The state is resolved by a decision, not by CI: raise `VERSION`,
+and a new draft is built for the new number — or delete the old draft if its
+build was never wanted.
+
 ### The process, end to end
 
 Fifteen steps, written for `<version>` and the same shape every time. Nothing
@@ -453,10 +485,14 @@ release *is* the archive.
 1. Develop the firmware change.
 2. Raise `VERSION` in the same change, once, deliberately. §1 says when this is
    required; a documentation-only change is not.
-3. Build and run the gates: `build-cv1.sh`, then `version_gate.py` and
+3. Push it to `main`. CI builds and runs the gates: `build-cv1.sh`, then
    `partition_gate.py` against the **generated** `partitions.yml`.
-4. Produce the release candidate. **It gets no tag** — its identity is its
-   hashes.
+   (`version_gate.py` has already refused the pull request if step 2 was
+   forgotten.) By hand the same three commands do the same thing.
+4. CI assembles the candidate — the three files of §3 — and attaches them to a
+   **draft release**. **It gets no tag**: its identity is its hashes, and they
+   are in the `RELEASE_MANIFEST.md` attached beside it. Locally, that step is
+   `make_shard_release.py`.
 5. Point Orb at exactly this artefact: the package into `app/assets/firmware/`,
    the version, image version and archive hash into the firmware registry.
 6. Run Orb's gates — analyzer, tests, and the test that hashes the shipped
@@ -466,18 +502,22 @@ release *is* the archive.
 
 **Release**
 
-8. Fix the release commit: the commit the accepted artefact was built from, with
-   a clean tree.
+8. Fix the release commit: the commit the accepted artefact was built from. It
+   is not a matter of memory — `RELEASE_MANIFEST.md` in the draft names it, and
+   that manifest was written by the run that produced the package.
 9. Create the annotated tag `shard-cv1-v<version>` **on that commit explicitly**,
-   never on `HEAD`, then verify it:
-   `git rev-parse shard-cv1-v<version>^{commit}` must equal the release commit.
-   Push branch and tag — no force, no other tags.
-10. Create the GitHub release **from the existing tag** — select it, never type a
-    new one — named `Shard CV1 v<version>`, with the body from §4.
-11. Attach exactly the three files from §3. The package is the accepted artefact
-    itself, never a rebuild: a rebuild carries a different signature and
-    therefore a different archive hash, and the hash recorded here would stop
-    identifying what was attached.
+   never on `HEAD` — main has usually moved on by now — then verify it:
+   `git rev-parse shard-cv1-v<version>^{commit}` must equal the commit the
+   manifest names. Push branch and tag — no force, no other tags.
+10. Publish the draft: replace the placeholder body with the body from §4 and
+    release it. It already carries the right name and the right tag, and
+    publishing against a tag that is already pushed uses that tag rather than
+    creating a second one.
+11. **Attach nothing and replace nothing.** The three files of §3 are already
+    there, and they are the ones that were built and accepted. Never swap the
+    package for a local copy or a rebuild: a rebuild carries a different
+    signature and therefore a different archive hash, and the hash recorded in
+    the manifest would stop identifying what is attached.
 
 **Verify what was published**
 
