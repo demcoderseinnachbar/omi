@@ -6,12 +6,28 @@ dependencies, no repository, no network — the rule is pure so that it can be
 checked here rather than only in anger.
 """
 
+import contextlib
+import io
+import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 
-from version_gate import check, format_version, is_firmware_change, parse_version
+from version_gate import (
+    TAG_PREFIX,
+    VERSION_FILE,
+    check,
+    format_version,
+    is_firmware_change,
+    main,
+    newest_published_tag,
+    parse_version,
+)
 
 V_0_0_2 = "VERSION_MAJOR = 0\nVERSION_MINOR = 0\nPATCHLEVEL = 2\nVERSION_TWEAK = 0\n"
 V_0_0_3 = "VERSION_MAJOR = 0\nVERSION_MINOR = 0\nPATCHLEVEL = 3\nVERSION_TWEAK = 0\n"
+V_0_0_4 = "VERSION_MAJOR = 0\nVERSION_MINOR = 0\nPATCHLEVEL = 4\nVERSION_TWEAK = 0\n"
 
 SOURCE = "omi/firmware/omi/src/lib/core/transport.c"
 CONFIG = "omi/firmware/omi/omi.conf"
@@ -166,10 +182,149 @@ class WhatTheGateDecides(unittest.TestCase):
 
     def test_a_first_version_file_is_a_rise(self):
         # Nothing to compare with reads as (0, 0, 0, 0), so the first VERSION
-        # any firmware change introduces counts as raising it.
+        # any firmware change introduces counts as raising it. This is the pure
+        # rule; where the baseline comes from is decided before it — see
+        # `TheBootstrapBaseline` below, which is what stops that reading being
+        # applied to a branch that simply never carried the file.
         ok, _ = check([SOURCE], "", V_0_0_2)
 
         self.assertTrue(ok)
+
+
+class WhichTagNamesThePublishedVersion(unittest.TestCase):
+    def test_it_finds_the_highest(self):
+        self.assertEqual(
+            newest_published_tag(
+                [f"{TAG_PREFIX}0.0.2", f"{TAG_PREFIX}0.0.3", f"{TAG_PREFIX}0.0.1"]
+            ),
+            f"{TAG_PREFIX}0.0.3",
+        )
+
+    def test_it_orders_numerically_and_not_by_string(self):
+        # `0.0.9` sorts after `0.0.10` as text, and picking the wrong one would
+        # let a published version be reused.
+        self.assertEqual(
+            newest_published_tag([f"{TAG_PREFIX}0.0.9", f"{TAG_PREFIX}0.0.10"]),
+            f"{TAG_PREFIX}0.0.10",
+        )
+
+    def test_somebody_elses_tags_are_not_shard_releases(self):
+        self.assertIsNone(newest_published_tag(["Omi_CV1_v3.0.21", "v1.0", "phase-2"]))
+
+    def test_nothing_published_is_not_a_version(self):
+        # A repository before its first release. No baseline is invented.
+        self.assertIsNone(newest_published_tag([]))
+
+
+class TheBootstrapBaseline(unittest.TestCase):
+    """The real historical state, end to end through git.
+
+    `main` never carried `omi/firmware/omi/VERSION` — the file was introduced
+    on the branch that produced the first release. An absent file parses as
+    0.0.0, so without the bootstrap the published 0.0.3 looks like a rise and a
+    firmware change under the published number passes.
+
+    Driven through `main()` rather than `check()` on purpose: what was wrong was
+    the baseline, and the baseline is chosen by the wiring.
+    """
+
+    def git(self, *args):
+        subprocess.run(
+            ["git", *args], cwd=self.repo, check=True, capture_output=True, text=True
+        )
+
+    def write(self, path, text):
+        full = os.path.join(self.repo, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def gate(self):
+        """Run the gate against `main`, in the repository, and report its exit."""
+        here = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                code = main(["version_gate.py", "main"])
+            return code, out.getvalue()
+        finally:
+            os.chdir(here)
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "gate@example.invalid")
+        self.git("config", "user.name", "Gate Test")
+
+        # `main`, as it actually is: firmware, and no VERSION file anywhere.
+        self.write(SOURCE, "int shipped(void) { return 0; }\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "main without a VERSION file")
+
+        # The branch that introduced the version and produced the release.
+        self.git("checkout", "-q", "-b", "shard")
+        self.write(VERSION_FILE, V_0_0_3)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "the released 0.0.3")
+        self.git("tag", "-a", f"{TAG_PREFIX}0.0.3", "-m", "released")
+
+    def test_a_firmware_change_under_the_published_version_is_refused(self):
+        self.write(SOURCE, "int shipped(void) { return 1; }\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "change the firmware, leave VERSION alone")
+
+        code, message = self.gate()
+
+        self.assertEqual(code, 1, message)
+        self.assertIn(f"{TAG_PREFIX}0.0.3", message)
+        self.assertIn("unchanged from", message)
+
+    def test_the_same_change_with_the_next_version_is_allowed(self):
+        self.write(SOURCE, "int shipped(void) { return 1; }\n")
+        self.write(VERSION_FILE, V_0_0_4)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "change the firmware and raise VERSION")
+
+        code, message = self.gate()
+
+        self.assertEqual(code, 0, message)
+        self.assertIn("0.0.3+0 -> 0.0.4+0", message)
+
+    def test_without_any_release_nothing_is_invented(self):
+        # A repository before its first release keeps the old reading: there is
+        # no published line to be measured against, and inventing one would
+        # refuse the very first firmware change anybody made.
+        self.git("tag", "-d", f"{TAG_PREFIX}0.0.3")
+        self.write(SOURCE, "int shipped(void) { return 1; }\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "change the firmware before any release")
+
+        code, _ = self.gate()
+
+        self.assertEqual(code, 0)
+
+    def test_a_version_on_the_base_still_wins(self):
+        # The bootstrap must never override a version somebody wrote down. Once
+        # `main` carries one, that is the baseline again.
+        self.git("checkout", "-q", "main")
+        self.write(VERSION_FILE, V_0_0_4)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "main now carries 0.0.4")
+
+        self.git("checkout", "-q", "shard")
+        self.write(SOURCE, "int shipped(void) { return 1; }\n")
+        self.write(VERSION_FILE, V_0_0_4)
+        self.git("add", "-A")
+        self.git("commit", "-qm", "firmware change, still 0.0.4")
+
+        code, message = self.gate()
+
+        # Refused against main's 0.0.4, not against the tag's 0.0.3.
+        self.assertEqual(code, 1, message)
+        self.assertIn("the target branch", message)
+        self.assertIn("0.0.4", message)
 
 
 if __name__ == "__main__":

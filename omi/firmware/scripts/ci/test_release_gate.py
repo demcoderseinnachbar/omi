@@ -4,7 +4,13 @@
 Run with ``python3 -m unittest`` from ``omi/firmware/scripts/ci``.
 """
 
+import contextlib
+import io
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 from release_gate import (
@@ -12,9 +18,13 @@ from release_gate import (
     REFUSE,
     RELEASE,
     TAG_PREFIX,
+    VERSION_FILE,
     check,
+    main,
     release_version,
 )
+
+SOURCE = "omi/firmware/omi/src/haptic.c"
 
 
 def version_file(major=0, minor=0, patch=3, tweak=0):
@@ -134,6 +144,112 @@ class TheNamingScheme(unittest.TestCase):
         )
 
         self.assertIsNone(omi_pattern.match(f"{TAG_PREFIX}0.0.4"))
+
+
+class TheFirstCandidateOnABranchWithoutAVersion(unittest.TestCase):
+    """The bootstrap, end to end through git.
+
+    Until the first Shard change reaches `main`, that branch has no VERSION
+    file. Without a baseline the gate answers *no release* whatever the version
+    says — so the first candidate could never be drafted, and the only way to
+    get one would be to push the released version's bytes to `main` first.
+    That would leave `main` claiming to be a version that is already published
+    for other bytes, which SHARD_RELEASES.md §2 forbids.
+    """
+
+    def git(self, *args):
+        subprocess.run(
+            ["git", *args], cwd=self.repo, check=True, capture_output=True, text=True
+        )
+
+    def write(self, path, text):
+        full = os.path.join(self.repo, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def gate(self, before):
+        here = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                code = main(["release_gate.py", before])
+            return code, out.getvalue()
+        finally:
+            os.chdir(here)
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "gate@example.invalid")
+        self.git("config", "user.name", "Gate Test")
+
+        self.write(SOURCE, "int shipped(void) { return 0; }\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "main without a VERSION file")
+        self.before = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        # The release that exists in the world, tagged but never on `main`.
+        self.write(VERSION_FILE, version_file(patch=3))
+        self.git("add", "-A")
+        self.git("commit", "-qm", "the released 0.0.3")
+        self.git("tag", "-a", f"{TAG_PREFIX}0.0.3", "-m", "released")
+        self.git("reset", "-q", "--hard", self.before)
+
+    def test_one_push_carrying_the_next_version_is_a_candidate(self):
+        self.write(SOURCE, "int shipped(void) { return 1; }\n")
+        self.write(VERSION_FILE, version_file(patch=4))
+        self.git("add", "-A")
+        self.git("commit", "-qm", "the haptic fix and 0.0.4, in one push")
+
+        code, out = self.gate(self.before)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("rose 0.0.3 -> 0.0.4", out)
+        self.assertIn("release=true", out)
+        self.assertIn(f"tag={TAG_PREFIX}0.0.4", out)
+
+    def test_the_published_version_never_becomes_a_candidate_again(self):
+        # Before the bootstrap this read as a rise from nothing and would have
+        # drafted a second release under a published number. Now the tag is the
+        # baseline, the version is seen to be unchanged, and no candidate is
+        # produced.
+        #
+        # Not a refusal: refusing a firmware change under the published version
+        # is the PR gate's job, and this one deliberately resolves anything
+        # short of a clear rise to *no release*. What it does emit is
+        # `firmware_changed`, which is how the workflow marks a waiting draft as
+        # superseded rather than letting it be published as current.
+        self.write(SOURCE, "int shipped(void) { return 1; }\n")
+        self.write(VERSION_FILE, version_file(patch=3))
+        self.git("add", "-A")
+        self.git("commit", "-qm", "firmware change under the published version")
+
+        code, out = self.gate(self.before)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("unchanged at 0.0.3", out)
+        self.assertIn("release=false", out)
+        self.assertIn("firmware_changed=true", out)
+
+    def test_without_any_release_there_is_still_nothing_to_compare(self):
+        self.git("tag", "-d", f"{TAG_PREFIX}0.0.3")
+        self.write(VERSION_FILE, version_file(patch=4))
+        self.git("add", "-A")
+        self.git("commit", "-qm", "a first VERSION, nothing published yet")
+
+        code, out = self.gate(self.before)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("release=false", out)
 
 
 if __name__ == "__main__":

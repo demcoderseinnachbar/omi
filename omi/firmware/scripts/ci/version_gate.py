@@ -58,6 +58,39 @@ FIRMWARE_EXCEPTIONS = (
 
 VERSION_FILE = "omi/firmware/omi/VERSION"
 
+# `shard-cv1-v<version>` / `Shard CV1 v<version>`, from SHARD_RELEASES.md §2.
+# Deliberately unlike the Omi scheme: `FIRMWARE_TAG_PATTERN` in the Omi backend
+# does not match it, so a Shard build can never be served to an Omi user by the
+# endpoint that serves theirs.
+#
+# It lives here rather than beside the release gate because both gates need the
+# same answer to "what has been published", and two copies of that would be two
+# things that can disagree.
+TAG_PREFIX = "shard-cv1-v"
+
+_PUBLISHED_TAG = re.compile(rf"^{re.escape(TAG_PREFIX)}(\d+)\.(\d+)\.(\d+)$")
+
+
+def newest_published_tag(tags: list[str]) -> str | None:
+    """The tag naming the highest version anybody has published, or None.
+
+    Ordered by the numbers the tag carries rather than by the string, so that
+    ``0.0.10`` comes after ``0.0.9``. A tag that is not one of ours — an Omi
+    release, a personal marker, anything — is not a Shard release and is
+    ignored rather than guessed at.
+    """
+    best: tuple[tuple[int, int, int], str] | None = None
+
+    for tag in tags:
+        found = _PUBLISHED_TAG.match(tag.strip())
+        if not found:
+            continue
+        version = (int(found[1]), int(found[2]), int(found[3]))
+        if best is None or version > best[0]:
+            best = (version, tag.strip())
+
+    return best[1] if best else None
+
 
 def is_firmware_change(path: str) -> bool:
     """Whether changing *path* can change the bytes on a device.
@@ -113,10 +146,13 @@ def check(
     changed_paths: list[str],
     base_version_text: str,
     head_version_text: str,
+    base_source: str = "the target branch",
 ) -> tuple[bool, str]:
     """Decide whether this change may go in.
 
-    Pure, so the rule can be tested without a repository.
+    Pure, so the rule can be tested without a repository. *base_source* names
+    where the baseline came from, because with the bootstrap below it is not
+    always the target branch and a message that said so would be wrong.
     """
     touched = sorted(path for path in changed_paths if is_firmware_change(path))
     if not touched:
@@ -128,7 +164,8 @@ def check(
     if head > base:
         return True, (
             f"Firmware changed and VERSION rose "
-            f"{format_version(base)} -> {format_version(head)}."
+            f"{format_version(base)} -> {format_version(head)} "
+            f"(baseline: {base_source})."
         )
 
     listed = "\n  ".join(touched)
@@ -136,12 +173,12 @@ def check(
     return False, (
         f"{VERSION_FILE} is {format_version(head)}, which is "
         + ("unchanged from" if unchanged else "not higher than")
-        + f" the target branch's {format_version(base)}.\n\n"
+        + f" {base_source}'s {format_version(base)}.\n\n"
         f"These changes reach the firmware image:\n  {listed}\n\n"
-        "Raise VERSION in this change. A device already running the target "
-        "branch's version can never be given an image that is not higher: the "
-        "bootloader refuses it, it cannot be replaced over the air, and there "
-        "is no cable to this hardware."
+        "Raise VERSION in this change. A device already running that version "
+        "can never be given an image that is not higher: the bootloader "
+        "refuses it, it cannot be replaced over the air, and there is no cable "
+        "to this hardware."
     )
 
 
@@ -175,7 +212,25 @@ def main(argv: list[str]) -> int:
     if not changed:
         changed = _git("diff", "--name-only", target, "HEAD").split()
 
-    ok, message = check(changed, _version_at(target), _version_at("HEAD"))
+    base_text = _version_at(target)
+    base_source = f"the target branch ({target})"
+
+    # The bootstrap. Until the first Shard change reaches `main`, that branch
+    # carries no VERSION file at all — and an absent file parses as 0.0.0, so
+    # the released 0.0.3 would look like a rise and a firmware change under the
+    # published number would pass. The published tags are what says otherwise,
+    # and they are already in the checkout.
+    #
+    # Only when the base has nothing to say. The moment the branch itself
+    # carries a VERSION, that is the baseline again — this never overrides a
+    # version somebody wrote down.
+    if not base_text.strip():
+        published = newest_published_tag(_git("tag", "--list", f"{TAG_PREFIX}*").split())
+        if published:
+            base_text = _version_at(published)
+            base_source = f"the published tag {published}"
+
+    ok, message = check(changed, base_text, _version_at("HEAD"), base_source)
     print(message)
     return 0 if ok else 1
 

@@ -104,6 +104,17 @@ All four run without dependencies, in CI and by hand alike:
 
 - `version_gate.py <target-ref>` — refuses a change that reaches the image and
   leaves `VERSION` where the target branch has it.
+
+  **When the target branch has no `VERSION` file at all**, the baseline is the
+  newest `shard-cv1-v*` tag instead. That is a bootstrap, not a second rule:
+  `main` did not carry the file until the first Shard change reached it, and an
+  absent file parses as `0.0.0` — so the published version would have looked
+  like a rise and a firmware change under it would have passed. The tags are the
+  archive (§2), they are already in the checkout, and no API is asked. The
+  moment a branch states a version, that version is the baseline again, and a
+  repository with no release yet establishes no baseline rather than an
+  invented one. `release_gate.py` uses the same fallback for the same reason:
+  without it the *first* candidate could never be recognised as a rise.
 - `partition_gate.py <partitions.yml>` — refuses a build whose `settings_storage`
   or `littlefs_storage` moved. Reads the **generated** table, not `pm_static.yml`.
 - `release_gate.py <before-ref>` — decides whether a push to `main` raised the

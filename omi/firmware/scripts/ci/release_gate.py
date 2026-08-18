@@ -30,13 +30,13 @@ import re
 import subprocess
 import sys
 
-from version_gate import VERSION_FILE, is_firmware_change, parse_version
-
-# `shard-cv1-v<version>` / `Shard CV1 v<version>`, from SHARD_RELEASES.md §2.
-# Deliberately unlike the Omi scheme: `FIRMWARE_TAG_PATTERN` in the Omi
-# backend does not match it, so a Shard build can never be served to an Omi
-# user by the endpoint that serves theirs.
-TAG_PREFIX = "shard-cv1-v"
+from version_gate import (
+    TAG_PREFIX,
+    VERSION_FILE,
+    is_firmware_change,
+    newest_published_tag,
+    parse_version,
+)
 
 # The three fields the tag is made of. VERSION_TWEAK is not among them, on
 # purpose — see `release_version` below.
@@ -208,8 +208,23 @@ def main(argv: list[str]) -> int:
 
     tags = _git("tag", "--list", f"{TAG_PREFIX}*").split()
 
+    before_text = _version_at(before) if before else ""
+
+    # The same bootstrap the version gate uses, and for the same reason: the
+    # first Shard change to reach `main` finds a branch that has never carried a
+    # VERSION file. Without this the first candidate could never be recognised
+    # as a rise, and the only way to get one would be to push the released
+    # version's bytes to `main` first — which would leave `main` claiming to be
+    # a published version it is not.
+    #
+    # Never over a version the base already states.
+    if not before_text.strip():
+        published = newest_published_tag(tags)
+        if published:
+            before_text = _version_at(published)
+
     decision, message, version = check(
-        _version_at(before) if before else "",
+        before_text,
         _version_at("HEAD"),
         tags,
     )
