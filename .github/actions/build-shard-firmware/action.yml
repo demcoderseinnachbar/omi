@@ -1,0 +1,99 @@
+name: Build the Shard firmware
+description: >
+  Builds the Shard application core from this checkout and refuses if the
+  persistent partitions moved. It produces a package and nothing else — no
+  release, no tag, no upload, no secret.
+
+# The build is described **once**, here, and both firmware workflows call it.
+# The alternative — the same Docker invocation copied into two workflows — is
+# the shape that let Orb's regression gate drift for a whole phase, and the
+# reason its CI keeps infrastructure in the workflow and rules in a script.
+#
+# `firmware_release.yml` keeps its own copy of the container pin. That is an
+# upstream Omi workflow on a separate release track and is deliberately left
+# untouched.
+
+outputs:
+  package:
+    description: The DFU package this run produced.
+    value: ${{ steps.settings.outputs.package }}
+  image:
+    description: The pinned Zephyr CI container the build ran in.
+    value: ${{ steps.settings.outputs.image }}
+  ncs:
+    description: The nRF Connect SDK version the build used.
+    value: ${{ steps.settings.outputs.ncs }}
+
+runs:
+  using: composite
+  steps:
+    # Every value the build and the manifest need, written down in one place.
+    - name: Settle the build environment
+      id: settings
+      shell: bash
+      run: |
+        set -euo pipefail
+        NCS=v2.9.0
+
+        # The version is also written in build-cv1.sh, which is what actually
+        # builds. Two copies of a version string are two things that can
+        # disagree, so check rather than assume: a cache key naming one SDK
+        # while the build uses another would restore a workspace that quietly
+        # does not match.
+        if ! grep -q "^NCS_VERSION=$NCS\$" omi/firmware/scripts/ci/build-cv1.sh; then
+          echo "::error::build-cv1.sh does not build NCS $NCS. Update this action and the cache key together."
+          exit 1
+        fi
+
+        {
+          echo "ncs=$NCS"
+          # Zephyr CI image blessed by omi/firmware/omi/BUILD.md, pinned by
+          # digest. Same pin as firmware_release.yml.
+          echo "image=ghcr.io/zephyrproject-rtos/ci:v0.26.13@sha256:b0ac6334d1926cd0971a0a444f7adc6dd020e88ee3ce865aa070b6475a3ac4eb"
+          echo "package=omi/firmware/$NCS/build/dfu_application.zip"
+          echo "partitions=omi/firmware/$NCS/build/partitions.yml"
+        } >> "$GITHUB_OUTPUT"
+
+    # ~1.5 GB of nRF Connect SDK. Without this every run spends its first ten
+    # minutes downloading a toolchain that never changes.
+    - name: Cache the nRF Connect SDK workspace
+      uses: actions/cache@v4
+      with:
+        path: omi/firmware/${{ steps.settings.outputs.ncs }}
+        key: ncs-${{ steps.settings.outputs.ncs }}-${{ runner.os }}
+
+    # The cache is written under a fixed key, so whatever `build/` existed when
+    # it was first stored comes back on every later run. Deleting it is what
+    # makes "this run built this package" true rather than probable — a release
+    # must never be able to pick up an artefact from an earlier build.
+    # `--pristine always` in build-cv1.sh would rebuild anyway; this removes the
+    # stale bytes instead of trusting them to be overwritten.
+    - name: Discard any restored build output
+      shell: bash
+      run: rm -rf "omi/firmware/${{ steps.settings.outputs.ncs }}/build"
+
+    - name: Build the application core
+      shell: bash
+      env:
+        CI_IMAGE: ${{ steps.settings.outputs.image }}
+      run: |
+        docker run --rm \
+          -v "$GITHUB_WORKSPACE/omi/firmware:/omi/firmware" \
+          -e CMAKE_PREFIX_PATH=/opt/toolchains \
+          "$CI_IMAGE" \
+          bash /omi/firmware/scripts/ci/build-cv1.sh
+
+    # The container runs as root and the tree is bind-mounted from the host.
+    - name: Fix workspace ownership
+      shell: bash
+      run: sudo chown -R "$(id -u):$(id -g)" omi/firmware
+
+    # Against the **generated** table, not `pm_static.yml`. Trusting a file to
+    # have had an effect is not the same as seeing the effect — and a moved
+    # settings region costs a device its clock, its microphone gain and its dim
+    # ratio, with no cable to this hardware to put them back.
+    - name: Require the persistent partitions to be where shipped hardware has them
+      shell: bash
+      run: |
+        python3 omi/firmware/scripts/ci/partition_gate.py \
+          "${{ steps.settings.outputs.partitions }}"

@@ -1,0 +1,122 @@
+name: Firmware build check
+
+# Does the Shard firmware still build, and did the persistent partitions stay
+# where shipped hardware has them?
+#
+# That is the whole job. It publishes nothing, tags nothing, uploads nothing and
+# reads no secret — a green run means the source builds, and means nothing about
+# whether the result may be given to a device. What a release requires is in
+# `omi/firmware/SHARD_RELEASES.md`, and hardware acceptance is the part no
+# workflow can do.
+#
+# The build itself lives in `.github/actions/build-shard-firmware`, so this file
+# decides only *when* to run it.
+
+on:
+  push:
+    branches: [main, 'feat/**']
+    paths:
+      - 'omi/firmware/**'
+      # Change how the build is run and the build has to run.
+      - '.github/workflows/firmware_build_check.yml'
+      - '.github/actions/build-shard-firmware/action.yml'
+  pull_request:
+    paths:
+      - 'omi/firmware/**'
+      - '.github/workflows/firmware_build_check.yml'
+      - '.github/actions/build-shard-firmware/action.yml'
+
+# Reads the checkout, and that is all it is entitled to.
+permissions:
+  contents: read
+
+# A second push should not leave the first one burning a runner for half an
+# hour to answer a question about code nobody is on any more.
+concurrency:
+  group: firmware-build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Shard application core (nRF5340)
+    runs-on: ubuntu-latest
+    # Cold, the build is ~25 minutes. The default ceiling is six hours, which is
+    # what a hung toolchain would happily spend.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The formatting step below compares with the merge base, which needs
+          # history on both sides. A shallow clone has neither.
+          fetch-depth: 0
+
+      # Before the long part, and deliberately also on `push` where
+      # `firmware_version_gate.yml` does not run: the build below trusts
+      # `partition_gate.py` to notice a moved settings region. A broken gate
+      # that reports success is worse than no gate, and this is the cheapest
+      # place to find out.
+      - name: Check the gates themselves
+        working-directory: omi/firmware/scripts/ci
+        run: python3 -m unittest --verbose
+
+      # `Repo Checks / Formatting` already refuses badly formatted C on a pull
+      # request. By then the branch has been pushed, reviewed and rebuilt, and
+      # the finding is about whitespace. This asks the same question on every
+      # push to `feat/**`, which is where the answer is still cheap.
+      #
+      # **Deliberately the same question, not a second one.** Same runner image,
+      # so the same `clang-format` binary; same `--dry-run --Werror`; the same
+      # file-selection expression, copied rather than narrowed so that a file
+      # this passes can never be one the pull request rejects. The rules
+      # themselves live where they already lived, in `.clang-format`. Nothing
+      # here defines a style.
+      #
+      # Changed files only. The inherited Omi sources under `omi/` were never
+      # formatted to this configuration — checking the tree would fail forever
+      # and reformatting it would be a change nobody asked for.
+      - name: Check C formatting the way the pull request will
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          base=$(git merge-base origin/main HEAD)
+          FILES=$(git diff --name-only "$base" HEAD \
+            | grep -E '^(omi|omiGlass)/.*\.(c|cpp|cc|cxx|h|hpp)$' \
+            | while IFS= read -r f; do [ -f "$f" ] && echo "$f"; done || true)
+          if [ -z "$FILES" ]; then
+            echo "No C/C++ file changed against main."
+            exit 0
+          fi
+          echo "$FILES"
+          echo "$FILES" | xargs clang-format --dry-run --Werror
+
+      - name: Build and check the partitions
+        id: firmware
+        uses: ./.github/actions/build-shard-firmware
+
+      # After the build on purpose. The step above restores the ~1.5 GB SDK
+      # workspace from the cache, so this reuses it rather than downloading a
+      # second copy; and it builds into the container's own `/tmp`, so nothing
+      # it produces can end up in the cached workspace and be restored into a
+      # later release build.
+      #
+      # A host test, not a device one: `native_sim` runs the real Zephyr
+      # scheduler, which is the half of the rule under test that no fake could
+      # show. It produces no artefact and touches no product image — the
+      # firmware built above is exactly the firmware without this step.
+      - name: Check who owns the haptic motor
+        env:
+          CI_IMAGE: ${{ steps.firmware.outputs.image }}
+          NCS: ${{ steps.firmware.outputs.ncs }}
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/omi/firmware:/omi/firmware" \
+            -e CMAKE_PREFIX_PATH=/opt/toolchains \
+            -e NCS="$NCS" \
+            "$CI_IMAGE" \
+            bash -euo pipefail -c '
+              git config --global --add safe.directory "*"
+              cd "/omi/firmware/$NCS"
+              west build -b native_sim /omi/firmware/tests/haptic \
+                -d /tmp/haptic-build --pristine always
+              /tmp/haptic-build/haptic/zephyr/zephyr.exe
+            '

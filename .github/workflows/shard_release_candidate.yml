@@ -1,0 +1,287 @@
+name: Shard release candidate
+
+# When `VERSION` rises on `main`, build the release and prepare it — as a
+# **draft**.
+#
+# Everything mechanical is done here: a fresh build in the pinned container, the
+# partition gate, the three files of SHARD_RELEASES.md §3, every hash read back
+# out of the files that were uploaded. Nothing is left for a person to get
+# wrong by hand.
+#
+# What is deliberately *not* done here is publishing, and the reason is §2:
+#
+#   > A firmware tag means released, not frozen. It is created only after the
+#   > concrete release artefact has been accepted on hardware — not when the
+#   > source looks finished, and **not when the build is green**.
+#
+# A draft carries no tag until somebody publishes it, which is exactly the state
+# §2 describes for a candidate: "a release candidate gets no tag; its identity is
+# its hashes". So this workflow produces the candidate and stops. Publishing is
+# §5 steps 5 to 15 — point Orb at these bytes, run Orb's gates, accept the
+# firmware on a named device, create the annotated tag on the build commit, then
+# publish this draft with the body from §4.
+#
+# The package attached here is the one a person then tests and Orb then bundles.
+# It is never rebuilt for publication: MCUboot signs with RSA-PSS, so a rebuild
+# has a different archive hash, and the hash recorded in the manifest — and in
+# Orb's firmware registry — would stop identifying what was attached.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'omi/firmware/**'
+
+permissions:
+  contents: read
+
+# Never cancelled mid-flight. A half-built candidate is not useful, and two
+# version bumps landing minutes apart are two releases, not a race.
+concurrency:
+  group: shard-release-candidate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Did the version rise?
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.gate.outputs.release }}
+      version: ${{ steps.gate.outputs.version }}
+      tag: ${{ steps.gate.outputs.tag }}
+      firmware_changed: ${{ steps.gate.outputs.firmware_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The gate compares with the previous commit and reads every existing
+          # `shard-cv1-v*` tag. A shallow clone would have neither, and a gate
+          # that cannot see the tags cannot notice a version being reused.
+          fetch-depth: 0
+
+      - name: Check the gates themselves
+        working-directory: omi/firmware/scripts/ci
+        run: python3 -m unittest --verbose
+
+      - name: Decide whether this push is a release
+        id: gate
+        run: |
+          python3 omi/firmware/scripts/ci/release_gate.py \
+            "${{ github.event.before }}"
+
+  candidate:
+    name: Build and draft the release
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # Only this job, and only to create the draft. Nothing else in this
+      # workflow can write to the repository.
+      contents: write
+    env:
+      TAG: ${{ needs.gate.outputs.tag }}
+      VERSION: ${{ needs.gate.outputs.version }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The gate already refused a version whose *tag* exists. A draft has no
+      # tag, so it is invisible to that check and has to be asked for here —
+      # before spending half an hour building something that could not be
+      # attached anywhere.
+      #
+      # Deliberately not `gh release view "$TAG"`. The REST endpoint behind it,
+      # `GET /releases/tags/{tag}`, is documented to return "a published release
+      # with the specified tag", and a draft has no tag at all — `tag_name` is a
+      # field it carries, not a ref. Current gh does fall back to a GraphQL
+      # draft lookup, but that is an implementation detail of one version of one
+      # tool, and this check fails in the dangerous direction: a lookup that
+      # quietly answers "nothing there" would build a second draft for a version
+      # somebody may already be testing on a device.
+      #
+      # Listing is documented to include drafts — "only users with push access
+      # will receive listings for draft releases" — and this job has
+      # contents: write. `--paginate` so the answer does not depend on how many
+      # releases the repository has.
+      - name: Refuse a release that already exists
+        run: |
+          set -euo pipefail
+
+          existing=$(gh api --paginate "repos/$REPO/releases" \
+            --jq ".[] | select(.tag_name == \"$TAG\") | \"\(.id) draft=\(.draft)\"")
+
+          if [ -n "$existing" ]; then
+            echo "Found: $existing"
+            echo "::error::A release or draft for $TAG already exists. A version that has been claimed is never reused for different firmware bytes — this costs a new version."
+            exit 1
+          fi
+
+          echo "$TAG is unclaimed."
+
+      - name: Build and check the partitions
+        id: build
+        uses: ./.github/actions/build-shard-firmware
+
+      - name: Assemble the three files a release is
+        id: release
+        run: |
+          python3 omi/firmware/scripts/ci/make_shard_release.py \
+            --package "${{ steps.build.outputs.package }}" \
+            --out "$RUNNER_TEMP/release" \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --commit "${{ github.sha }}" \
+            --built-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --ncs "${{ steps.build.outputs.ncs }}" \
+            --container "${{ steps.build.outputs.image }}"
+
+      # Deliberately not the body from §4. That one names what changed against
+      # the previous release and what the hardware acceptance proved, and no
+      # workflow knows either. Generating something in its shape would put a
+      # plausible sentence where a person's statement belongs.
+      - name: Write the placeholder body
+        run: |
+          cat > "$RUNNER_TEMP/body.md" <<'BODY'
+          **Draft — not released.** Built by CI from the commit below. No device
+          has received these bytes.
+
+          Before publishing, replace this text with the release body described in
+          `omi/firmware/SHARD_RELEASES.md` §4, and complete §5 steps 5 to 15:
+          point Orb at exactly this package, run Orb's gates, accept the firmware
+          on a named device, then create the annotated tag on this commit and
+          publish.
+
+          `RELEASE_MANIFEST.md` records what this build established and what it
+          did not. The three hashes are in there, taken from the files attached
+          here.
+          BODY
+
+      - name: Create the draft release
+        run: |
+          set -euo pipefail
+
+          # The URL comes from the command that created it. Looking the draft up
+          # afterwards would hit the same tag endpoint that does not serve
+          # drafts, and would fail a job whose work had already succeeded.
+          url=$(gh release create "$TAG" \
+            --repo "$REPO" \
+            --draft \
+            --title "Shard CV1 $VERSION" \
+            --notes-file "$RUNNER_TEMP/body.md" \
+            --target "${{ github.sha }}" \
+            "$RUNNER_TEMP/release/Shard_CV1_appcore_v$VERSION.zip" \
+            "$RUNNER_TEMP/release/RELEASE_MANIFEST.md" \
+            "$RUNNER_TEMP/release/SHA256SUMS")
+
+          {
+            echo "### Shard $VERSION — draft release prepared"
+            echo ""
+            echo "Not published, and carrying no tag. Continue with SHARD_RELEASES.md §5 step 5."
+            echo ""
+            echo "$url"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The firmware moved on and the version did not. If a draft is waiting under
+  # that same number, it now describes bytes this branch no longer has — and
+  # nothing about the release page would say so at the moment somebody presses
+  # publish. Publishing it would spend the version on the *older* firmware,
+  # unrecoverably: the bootloader refuses anything not higher, and there is no
+  # cable to this hardware.
+  #
+  # So the draft is marked and the run goes red. It is not deleted — a candidate
+  # may be on a device right now, and throwing away the artefact somebody is
+  # testing would be the worse mistake. Resolving it is a decision: raise the
+  # version, or delete the draft.
+  supersede:
+    name: Mark a draft the branch has moved past
+    needs: gate
+    if: >-
+      needs.gate.outputs.release == 'false' &&
+      needs.gate.outputs.firmware_changed == 'true' &&
+      needs.gate.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.gate.outputs.tag }}
+      VERSION: ${{ needs.gate.outputs.version }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Mark the draft as overtaken
+        run: |
+          set -euo pipefail
+
+          # Found by listing, not by `gh release view "$TAG"` — see the note in
+          # the `candidate` job: the tag endpoint does not serve drafts, and a
+          # draft is exactly what this is looking for.
+          #
+          # Everything afterwards addresses the release by its **numeric id**.
+          # A name can match more than one thing over time; an id is the release
+          # this run actually found, so nothing else can be edited by accident.
+          id=$(gh api --paginate "repos/$REPO/releases" \
+            --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)
+
+          if [ -z "$id" ]; then
+            echo "No release or draft for $TAG. Nothing to supersede."
+            exit 0
+          fi
+
+          release=$(gh api "repos/$REPO/releases/$id")
+          draft=$(printf '%s' "$release" | jq -r .draft)
+
+          if [ "$draft" != "true" ]; then
+            # Already published. A firmware change under a released version is a
+            # separate problem, and `version_gate.py` refuses the pull request
+            # that would carry it. The release itself is not touched.
+            echo "::warning::$TAG is already published, and the firmware changed without raising VERSION. The next release must pick a new number."
+            exit 0
+          fi
+
+          body=$(printf '%s' "$release" | jq -r .body)
+          built_from=$(printf '%s' "$release" | jq -r .target_commitish)
+
+          case "$body" in
+            *"<!-- superseded -->"*)
+              echo "Draft $id is already marked. Leaving it exactly as it is."
+              ;;
+            *)
+              # The existing body is kept and the warning goes in front of it:
+              # somebody may already have written the §4 body here, and losing
+              # it would be this job destroying work while claiming to protect
+              # it. The marker above makes that idempotent.
+              {
+                echo "<!-- superseded -->"
+                echo "> [!CAUTION]"
+                echo "> **Do not publish this draft.** The firmware changed after it was"
+                echo "> built, and \`VERSION\` stayed at \`$VERSION\`."
+                echo ">"
+                echo "> Built from \`$built_from\`. \`main\` has since moved on, starting with"
+                echo "> \`${{ github.sha }}\`. The package attached here is the older firmware."
+                echo ">"
+                echo "> Publishing it would spend \`$VERSION\` on those bytes, and no device"
+                echo "> could ever be given the newer ones under that number — the bootloader"
+                echo "> refuses anything that is not higher and cannot be replaced over the"
+                echo "> air."
+                echo ">"
+                echo "> Raise \`VERSION\` (a new draft is built automatically), or delete this"
+                echo "> draft if its build was never wanted."
+                echo ""
+                printf '%s\n' "$body"
+              } > "$RUNNER_TEMP/superseded.md"
+
+              # Title and body only. `draft`, the assets and the target commit
+              # are not in this request and cannot be changed by it.
+              jq -n \
+                --arg name "SUPERSEDED — Shard CV1 $VERSION" \
+                --rawfile body "$RUNNER_TEMP/superseded.md" \
+                '{name: $name, body: $body}' \
+                | gh api --method PATCH "repos/$REPO/releases/$id" --input -
+
+              echo "Marked draft $id as superseded."
+              ;;
+          esac
+
+          echo "::error::A draft for $VERSION exists but the firmware has moved past it. Raise VERSION, or delete the draft."
+          exit 1

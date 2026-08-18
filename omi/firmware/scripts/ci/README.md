@@ -1,5 +1,18 @@
 # Firmware CI / Release
 
+Two release tracks share this directory, and they answer different questions.
+Everything below the "Shard" heading belongs to **our** product; everything
+above it is the upstream **Omi** track and is left as it is.
+
+| Track | Builds | Publishes | Documented in |
+|---|---|---|---|
+| **Omi CV1** | `firmware_release.yml`, manual dispatch | `Omi_CV1_v…`, served to Omi users by the Omi backend | this file |
+| **Shard** | `firmware_build_check.yml` on every change, `shard_release_candidate.yml` on a version bump | nothing — it drafts, a person publishes | [`SHARD_RELEASES.md`](../../SHARD_RELEASES.md) |
+
+---
+
+## Omi CV1
+
 Automation for building and releasing **Omi CV1** firmware (nRF5340).
 
 Workflow: [`.github/workflows/firmware_release.yml`](../../../../.github/workflows/firmware_release.yml)
@@ -65,3 +78,80 @@ from any branch). The publish step also refuses to overwrite an existing
 - DK2 / OmiGlass are **not** automated here yet. DK2 can be added as a second job
   (NCS 2.7.0 + `adafruit-nrfutil`); OmiGlass uses a separate ESP32/PlatformIO toolchain.
 - MCUboot signing uses the committed key `omi/firmware/bootloader/mcuboot/root-rsa-2048.pem`.
+
+---
+
+## Shard
+
+**The release process is in [`SHARD_RELEASES.md`](../../SHARD_RELEASES.md) and is
+not repeated here.** This section is only about which piece of automation does
+what.
+
+| | Runs on | Does |
+|---|---|---|
+| [`firmware_build_check.yml`](../../../../.github/workflows/firmware_build_check.yml) | every push to `main` / `feat/**` and every PR touching `omi/firmware/**` | checks C formatting, builds, checks the partitions, runs the haptic ownership tests on `native_sim`. Publishes nothing, uploads nothing, reads no secret |
+| [`firmware_version_gate.yml`](../../../../.github/workflows/firmware_version_gate.yml) | pull requests touching `omi/firmware/**` | refuses a firmware change that forgot to raise `VERSION` |
+| [`shard_release_candidate.yml`](../../../../.github/workflows/shard_release_candidate.yml) | pushes to `main` that raise `VERSION` | builds, assembles the release, attaches it to a **draft**. Never publishes and never tags |
+| the same workflow | pushes to `main` that change the firmware **without** raising `VERSION` | marks an existing draft `SUPERSEDED` and fails, so it cannot be published as though it were current |
+
+The build itself is described once, in
+[`.github/actions/build-shard-firmware`](../../../../.github/actions/build-shard-firmware/action.yml),
+and both workflows call it. Change how the firmware is built there.
+
+**Formatting is asked about on the branch, not first on the pull request.**
+`Repo Checks / Formatting` refuses badly formatted C when a PR is opened; the
+build check asks the same question on every push, where the answer is still
+cheap. It is the same question on purpose — same runner image and therefore the
+same `clang-format`, same `--dry-run --Werror`, and the same file-selection
+expression. The style itself is `.clang-format` and is defined nowhere else.
+
+Changed files only: the inherited Omi sources were never formatted to this
+configuration, so a whole-tree check would fail forever. `scripts/pre-push` runs
+the same check locally, but **skips silently when `clang-format` is not
+installed** — which is exactly how a new file reached a pull request unchecked.
+
+### Scripts
+
+All four run without dependencies, in CI and by hand alike:
+
+- `version_gate.py <target-ref>` — refuses a change that reaches the image and
+  leaves `VERSION` where the target branch has it.
+
+  **When the target branch has no `VERSION` file at all**, the baseline is the
+  newest `shard-cv1-v*` tag instead. That is a bootstrap, not a second rule:
+  `main` did not carry the file until the first Shard change reached it, and an
+  absent file parses as `0.0.0` — so the published version would have looked
+  like a rise and a firmware change under it would have passed. The tags are the
+  archive (§2), they are already in the checkout, and no API is asked. The
+  moment a branch states a version, that version is the baseline again, and a
+  repository with no release yet establishes no baseline rather than an
+  invented one. `release_gate.py` uses the same fallback for the same reason:
+  without it the *first* candidate could never be recognised as a rise.
+- `partition_gate.py <partitions.yml>` — refuses a build whose `settings_storage`
+  or `littlefs_storage` moved. Reads the **generated** table, not `pm_static.yml`.
+- `release_gate.py <before-ref>` — decides whether a push to `main` raised the
+  version, and whether that release is still unclaimed. Answers `release`,
+  `no release` or a refusal; uncertainty is never `release`.
+- `make_shard_release.py` — assembles the three files of §3 from one build, reads
+  the MCUboot header and TLV trailer, and refuses a package that is not the
+  application core alone or whose image disagrees with the version being
+  released. Recomputes the payload hash rather than transcribing it.
+
+Their tests are `test_*.py` beside them: `python3 -m unittest` in this directory,
+no arguments, no dependencies.
+
+### Doing it by hand
+
+The same candidate, without CI:
+
+```bash
+cd omi/firmware
+bash scripts/ci/build-cv1.sh                                    # in the container
+python3 scripts/ci/partition_gate.py v2.9.0/build/partitions.yml
+python3 scripts/ci/make_shard_release.py \
+  --package v2.9.0/build/dfu_application.zip \
+  --out /tmp/release --version 0.0.4 --tag shard-cv1-v0.0.4 \
+  --commit "$(git rev-parse HEAD)" \
+  --built-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --ncs v2.9.0 --container "$CI_IMAGE"
+```

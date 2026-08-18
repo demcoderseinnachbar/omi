@@ -5,6 +5,7 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/spinlock.h>
 
 LOG_MODULE_REGISTER(haptic, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -15,11 +16,38 @@ static const struct gpio_dt_spec haptic_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(m
 // Haptic Off Work Item
 static struct k_work_delayable haptic_off_work;
 
+// Guards the pair (haptic_off_at, motor pin). Held across a tick read, a
+// comparison and one GPIO register write and never across a blocking call, so
+// it is safe to take from any thread -- including the system workqueue that
+// runs haptic_off_work itself, which turnoff_all() does.
+static struct k_spinlock haptic_lock;
+
+// Tick at which the pulse that currently owns the motor is due to end. A work
+// handler may only switch the motor off once this has been reached. An older
+// handler that was still running when a newer pulse started finds a deadline in
+// the future and leaves the motor alone; the newer pulse has already moved the
+// off item to its own deadline.
+static int64_t haptic_off_at;
+
 // Work handler to turn off haptic motor
 static void haptic_off_work_handler(struct k_work *work)
 {
-    haptic_off();
-    LOG_INF("Haptic turned off by work handler");
+    k_spinlock_key_t key = k_spin_lock(&haptic_lock);
+    bool expired = k_uptime_ticks() >= haptic_off_at;
+
+    if (expired) {
+        haptic_off();
+    }
+
+    k_spin_unlock(&haptic_lock, key);
+
+    // Logging stays outside the lock: the backend may defer, and nothing that
+    // can block belongs in a spinlock section.
+    if (expired) {
+        LOG_INF("Haptic turned off by work handler");
+    } else {
+        LOG_DBG("Stale haptic off ignored, a newer pulse owns the motor");
+    }
 }
 
 // BLE Service definitions
@@ -109,12 +137,18 @@ void play_haptic_milli(uint32_t duration)
         return;
     }
 
-    // Cancel any pending off work before proceeding
-    k_work_cancel_delayable(&haptic_off_work);
-
     if (duration == 0) {
-        // If duration is 0, ensure the pin is off and we are done.
+        // If duration is 0, ensure the pin is off and we are done. The pending
+        // off item is deliberately left alone rather than cancelled: cancelling
+        // a running handler sets K_WORK_CANCELING, and work_timeout() drops a
+        // submission silently while that bit is set. Letting the item fire is
+        // harmless -- it finds the deadline reached and writes 0 to a pin that
+        // is already 0 -- and the next pulse moves it with k_work_reschedule().
+        k_spinlock_key_t key = k_spin_lock(&haptic_lock);
+        haptic_off_at = k_uptime_ticks();
         gpio_pin_set_dt(&haptic_pin, 0);
+        k_spin_unlock(&haptic_lock, key);
+
         LOG_INF("Haptic explicitly stopped (duration 0)");
         return;
     }
@@ -132,9 +166,23 @@ void play_haptic_milli(uint32_t duration)
     }
 
     LOG_INF("Playing haptic for %u ms", duration);
+
+    // Claim the motor and switch it on under the lock the off handler also
+    // takes, so a handler that is already running cannot slip between these two
+    // lines and switch the pin straight back off. K_MSEC() converts with
+    // k_ms_to_ticks_ceil64(), so the deadline computed here is never later than
+    // the timeout scheduled below and the pulse's own handler always ends it.
+    k_spinlock_key_t key = k_spin_lock(&haptic_lock);
+    haptic_off_at = k_uptime_ticks() + k_ms_to_ticks_ceil64(duration);
     gpio_pin_set_dt(&haptic_pin, 1);
-    // Schedule the work item to turn the haptic off after the duration
-    k_work_schedule(&haptic_off_work, K_MSEC(duration));
+    k_spin_unlock(&haptic_lock, key);
+
+    // Move the single off item to this pulse's deadline. k_work_reschedule()
+    // rather than cancel + k_work_schedule(): cancelling a *running* handler
+    // sets K_WORK_CANCELING, and k_work_schedule() then silently declines to
+    // schedule (kernel/work.c, k_work_schedule_for_queue), which used to leave
+    // the pulse with no end scheduled at all.
+    k_work_reschedule(&haptic_off_work, K_MSEC(duration));
 }
 
 void register_haptic_service(void)
