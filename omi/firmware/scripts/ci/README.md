@@ -89,7 +89,7 @@ what.
 
 | | Runs on | Does |
 |---|---|---|
-| [`firmware_build_check.yml`](../../../../.github/workflows/firmware_build_check.yml) | every push to `main` / `feat/**` and every PR touching `omi/firmware/**` | builds, checks the partitions. Publishes nothing, uploads nothing, reads no secret |
+| [`firmware_build_check.yml`](../../../../.github/workflows/firmware_build_check.yml) | every push to `main` / `feat/**` and every PR touching `omi/firmware/**` | builds, checks the partitions, runs the haptic ownership tests on `native_sim`. Publishes nothing, uploads nothing, reads no secret |
 | [`firmware_version_gate.yml`](../../../../.github/workflows/firmware_version_gate.yml) | pull requests touching `omi/firmware/**` | refuses a firmware change that forgot to raise `VERSION` |
 | [`shard_release_candidate.yml`](../../../../.github/workflows/shard_release_candidate.yml) | pushes to `main` that raise `VERSION` | builds, assembles the release, attaches it to a **draft**. Never publishes and never tags |
 | the same workflow | pushes to `main` that change the firmware **without** raising `VERSION` | marks an existing draft `SUPERSEDED` and fails, so it cannot be published as though it were current |

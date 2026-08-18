@@ -56,4 +56,33 @@ jobs:
         run: python3 -m unittest --verbose
 
       - name: Build and check the partitions
+        id: firmware
         uses: ./.github/actions/build-shard-firmware
+
+      # After the build on purpose. The step above restores the ~1.5 GB SDK
+      # workspace from the cache, so this reuses it rather than downloading a
+      # second copy; and it builds into the container's own `/tmp`, so nothing
+      # it produces can end up in the cached workspace and be restored into a
+      # later release build.
+      #
+      # A host test, not a device one: `native_sim` runs the real Zephyr
+      # scheduler, which is the half of the rule under test that no fake could
+      # show. It produces no artefact and touches no product image — the
+      # firmware built above is exactly the firmware without this step.
+      - name: Check who owns the haptic motor
+        env:
+          CI_IMAGE: ${{ steps.firmware.outputs.image }}
+          NCS: ${{ steps.firmware.outputs.ncs }}
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/omi/firmware:/omi/firmware" \
+            -e CMAKE_PREFIX_PATH=/opt/toolchains \
+            -e NCS="$NCS" \
+            "$CI_IMAGE" \
+            bash -euo pipefail -c '
+              git config --global --add safe.directory "*"
+              cd "/omi/firmware/$NCS"
+              west build -b native_sim /omi/firmware/tests/haptic \
+                -d /tmp/haptic-build --pristine always
+              /tmp/haptic-build/haptic/zephyr/zephyr.exe
+            '
