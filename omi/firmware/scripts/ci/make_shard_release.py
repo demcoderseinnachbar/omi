@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import struct
 import sys
 import zipfile
@@ -187,6 +186,122 @@ def parse_image(blob: bytes) -> ImageInfo:
     )
 
 
+# What sysbuild puts in a build package for this board, named rather than
+# counted. `SB_CONFIG_NETCORE_APP_UPDATE=y` has always been set, so the build
+# package carries both cores; the release line carries the first alone.
+#
+# Both entries say `type: application`, so the type does not tell them apart.
+# The index and the board do, and they are what the build actually writes:
+#
+#   index 0  board "omi"                    omi.signed.bin   the application core
+#   index 1  board "omi/nrf5340/cpunet"     ipc_radio.bin    the radio core
+#
+# The file names are not pinned. They follow the Zephyr application name and
+# would change for a reason that has nothing to do with what is being released;
+# the index, board and core they describe are the identity.
+APP_CORE_INDEX = "0"
+APP_CORE_BOARD = "omi"
+RADIO_CORE_INDEX = "1"
+RADIO_CORE_BOARD = "omi/nrf5340/cpunet"
+
+
+def select_app_core(manifest: dict) -> dict:
+    """The one manifest entry a Shard release publishes.
+
+    **Refuses rather than picks.** Every other composition — no application
+    core, two of them, a third image, a radio core that is not the one this
+    build has always produced — ends here. A release that quietly dropped an
+    image it did not recognise would be claiming to have looked.
+    """
+    files = manifest.get("files")
+    if not isinstance(files, list) or not files:
+        raise Refused("The build package's manifest lists no files.")
+
+    app = [f for f in files if f.get("image_index") == APP_CORE_INDEX]
+    if len(app) != 1:
+        raise Refused(
+            f"The build package declares {len(app)} images at index "
+            f"{APP_CORE_INDEX}, expected exactly one — the application core is "
+            "what a Shard release is."
+        )
+
+    core = app[0]
+    if core.get("type") != "application" or core.get("board") != APP_CORE_BOARD:
+        raise Refused(
+            f"The image at index {APP_CORE_INDEX} is "
+            f"{core.get('type')!r} for board {core.get('board')!r}, not the "
+            f"Shard application core ('application' for {APP_CORE_BOARD!r})."
+        )
+
+    for other in files:
+        if other is core:
+            continue
+        if (
+            other.get("image_index") != RADIO_CORE_INDEX
+            or other.get("board") != RADIO_CORE_BOARD
+        ):
+            raise Refused(
+                f"The build package carries an image this release line does not "
+                f"know: index {other.get('image_index')!r}, board "
+                f"{other.get('board')!r}, file {other.get('file')!r}. Only the "
+                f"radio core at index {RADIO_CORE_INDEX} is a known build "
+                "input, and it is not published. A new image is a decision "
+                "about what a Shard release contains, not something to drop."
+            )
+
+    return core
+
+
+def write_app_core_package(build_package: Path, asset: Path) -> None:
+    """Narrow the build package to the one image a Shard release publishes.
+
+    sysbuild produces both cores in one DFU package; §3 publishes the
+    application core alone, and 0.0.3 is that shape. The narrowing happens here
+    rather than in the build, so nothing about how the firmware is produced
+    depends on what this release line chooses to ship.
+
+    The surviving manifest entry is **copied**, never rebuilt: what a device
+    reads about an image it is about to write is the build's own description of
+    it, minus the entries for images that are not in the package.
+    """
+    with zipfile.ZipFile(build_package) as source:
+        names = source.namelist()
+        if "manifest.json" not in names:
+            raise Refused(
+                "The build package has no manifest.json, so which image is the "
+                "application core cannot be established. It is not guessed."
+            )
+        try:
+            manifest = json.loads(source.read("manifest.json"))
+        except json.JSONDecodeError as broken:
+            raise Refused(f"The build package's manifest is not JSON: {broken}")
+
+        core = select_app_core(manifest)
+        name = core.get("file")
+        if not isinstance(name, str) or name not in names:
+            raise Refused(
+                f"The manifest names {name!r} as the application core, but the "
+                "build package does not contain it."
+            )
+
+        kept = source.getinfo(name)
+        blob = source.read(name)
+        stamp = source.getinfo("manifest.json").date_time
+
+    trimmed = dict(manifest)
+    trimmed["files"] = [core]
+
+    # Deterministic: the same build package always yields the same asset. The
+    # image keeps its own entry metadata; the manifest is written with a fixed
+    # shape and the timestamp it had in the build package.
+    with zipfile.ZipFile(asset, "w", zipfile.ZIP_DEFLATED) as release:
+        release.writestr(
+            zipfile.ZipInfo("manifest.json", date_time=stamp),
+            json.dumps(trimmed, indent=4) + "\n",
+        )
+        release.writestr(kept, blob)
+
+
 def read_package(package: Path, expected_version: str) -> tuple[ImageInfo, str]:
     """Check a DFU package and read the image inside it.
 
@@ -340,7 +455,14 @@ def write_release(
     """Assemble the three files, reading every hash back out of them."""
     out.mkdir(parents=True, exist_ok=True)
     asset = out / ASSET_TEMPLATE.format(version=version)
-    shutil.copyfile(package, asset)
+
+    try:
+        # Not a copy. The build package holds both cores; this is where it
+        # becomes the one-image package §3 describes.
+        write_app_core_package(package, asset)
+    except Refused:
+        asset.unlink(missing_ok=True)
+        raise
 
     try:
         # Read from the copy that will be uploaded, not from the build output it

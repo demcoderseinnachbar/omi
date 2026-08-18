@@ -65,15 +65,58 @@ def signed_image(
     return covered + trailer
 
 
-def package(path, images=(("omi.signed.bin", None),), kinds=("application",)):
-    """A DFU package in the shape sysbuild produces one."""
+# The manifest sysbuild actually writes for this board, field for field, read
+# off a real `dfu_application.zip`. The earlier fixture here declared a single
+# entry with no `image_index` and no `board` — the shape a release *ends up*
+# having rather than the shape a build *produces*. Every test passed, and the
+# first real candidate run refused the build package it was handed.
+APP_CORE = {
+    "type": "application",
+    "board": "omi",
+    "soc": "nrf5340",
+    "load_address": 66048,
+    "image_index": "0",
+    "slot_index_primary": "1",
+    "slot_index_secondary": "2",
+    "version_MCUBOOT": "0.0.4+0",
+    "size": 249148,
+    "file": "omi.signed.bin",
+    "modtime": 1786861789,
+}
+
+RADIO_CORE = {
+    "type": "application",
+    "board": "omi/nrf5340/cpunet",
+    "soc": "nrf5340",
+    "load_address": 16812032,
+    "image_index": "1",
+    "slot_index_primary": "3",
+    "slot_index_secondary": "4",
+    "version_MCUBOOT": None,
+    "size": 175092,
+    "file": "ipc_radio.bin",
+    "modtime": 1786861789,
+}
+
+# Not a valid MCUboot image on purpose: nothing may parse the radio core, and a
+# test that handed it a real one could not show that.
+RADIO_BLOB = b"the radio core, which a Shard release does not publish"
+
+
+def package(path, entries=None, images=None):
+    """A DFU package in the shape sysbuild produces one — both cores."""
+    entries = [dict(APP_CORE), dict(RADIO_CORE)] if entries is None else entries
+    if images is None:
+        images = (("omi.signed.bin", None), ("ipc_radio.bin", RADIO_BLOB))
+
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
             "manifest.json",
             json.dumps(
                 {
                     "format-version": 1,
-                    "files": [{"type": kind, "file": "omi.signed.bin"} for kind in kinds],
+                    "time": 1786862021,
+                    "files": entries,
                     "name": "omi",
                 }
             ),
@@ -83,8 +126,8 @@ def package(path, images=(("omi.signed.bin", None),), kinds=("application",)):
     return path
 
 
-def assemble(directory, version="0.0.4", images=(("omi.signed.bin", None),), kinds=("application",)):
-    built = package(directory / "dfu_application.zip", images=images, kinds=kinds)
+def assemble(directory, version="0.0.4", entries=None, images=None):
+    built = package(directory / "dfu_application.zip", entries=entries, images=images)
     return write_release(
         package=built,
         out=directory / "out",
@@ -160,27 +203,112 @@ class WhatTheReaderRefuses(unittest.TestCase):
 
 
 class WhatThePackageMustBe(unittest.TestCase):
-    def test_a_package_carrying_a_second_image_is_refused(self):
-        # App core only. A net-core image would update something this release
-        # line has never claimed to update.
+    def test_a_third_image_this_line_does_not_know_is_refused(self):
+        # Not "everything except the app core is dropped". An image nobody has
+        # decided about stops the release; dropping it silently would be a
+        # decision made by omission.
+        stranger = dict(RADIO_CORE, image_index="2", board="omi/nrf5340/cpuppr",
+                        file="stranger.bin")
         with tempfile.TemporaryDirectory() as raw:
             with self.assertRaises(Refused) as refusal:
                 assemble(
                     Path(raw),
+                    entries=[dict(APP_CORE), dict(RADIO_CORE), stranger],
                     images=(
-                        ("omi.signed.bin", signed_image()),
-                        ("net_core.signed.bin", signed_image()),
+                        ("omi.signed.bin", None),
+                        ("ipc_radio.bin", RADIO_BLOB),
+                        ("stranger.bin", RADIO_BLOB),
                     ),
                 )
 
-        self.assertIn("2 images", str(refusal.exception))
+        self.assertIn("does not know", str(refusal.exception))
+        self.assertIn("stranger.bin", str(refusal.exception))
 
-    def test_a_package_declaring_a_net_core_is_refused(self):
+    def test_a_second_image_at_the_app_core_index_is_refused(self):
+        twin = dict(APP_CORE, file="other.signed.bin")
         with tempfile.TemporaryDirectory() as raw:
             with self.assertRaises(Refused) as refusal:
-                assemble(Path(raw), kinds=("application", "netcore"))
+                assemble(
+                    Path(raw),
+                    entries=[dict(APP_CORE), twin],
+                    images=(("omi.signed.bin", None), ("other.signed.bin", None)),
+                )
 
-        self.assertIn("expected the application core alone", str(refusal.exception))
+        self.assertIn("2 images at index 0", str(refusal.exception))
+
+    def test_a_package_with_no_application_core_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaises(Refused) as refusal:
+                assemble(
+                    Path(raw),
+                    entries=[dict(RADIO_CORE)],
+                    images=(("ipc_radio.bin", RADIO_BLOB),),
+                )
+
+        self.assertIn("0 images at index 0", str(refusal.exception))
+
+    def test_an_app_core_for_another_board_is_refused(self):
+        # The index alone is not identity: index 0 of some other product is not
+        # this product's application core.
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaises(Refused) as refusal:
+                assemble(Path(raw), entries=[dict(APP_CORE, board="somebody_else")])
+
+        self.assertIn("not the", str(refusal.exception))
+
+    def test_a_manifest_naming_an_image_the_package_lacks_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaises(Refused) as refusal:
+                assemble(
+                    Path(raw),
+                    entries=[dict(APP_CORE, file="absent.bin")],
+                    images=(("omi.signed.bin", None),),
+                )
+
+        self.assertIn("does not contain it", str(refusal.exception))
+
+    def test_a_package_without_a_manifest_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            built = directory / "dfu_application.zip"
+            with zipfile.ZipFile(built, "w") as archive:
+                archive.writestr("omi.signed.bin", signed_image())
+
+            with self.assertRaises(Refused) as refusal:
+                write_release(
+                    package=built,
+                    out=directory / "out",
+                    version="0.0.4",
+                    tag="shard-cv1-v0.0.4",
+                    commit="935ff3db",
+                    built_at="2026-08-17T09:00:00Z",
+                    ncs="v2.9.0",
+                    container="ghcr.io/zephyrproject-rtos/ci@sha256:b0ac63",
+                )
+
+        self.assertIn("no manifest.json", str(refusal.exception))
+
+    def test_a_manifest_that_is_not_json_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            built = directory / "dfu_application.zip"
+            with zipfile.ZipFile(built, "w") as archive:
+                archive.writestr("manifest.json", "{not json")
+                archive.writestr("omi.signed.bin", signed_image())
+
+            with self.assertRaises(Refused) as refusal:
+                write_release(
+                    package=built,
+                    out=directory / "out",
+                    version="0.0.4",
+                    tag="shard-cv1-v0.0.4",
+                    commit="935ff3db",
+                    built_at="2026-08-17T09:00:00Z",
+                    ncs="v2.9.0",
+                    container="ghcr.io/zephyrproject-rtos/ci@sha256:b0ac63",
+                )
+
+        self.assertIn("not JSON", str(refusal.exception))
 
     def test_an_image_that_disagrees_with_the_release_version_is_refused(self):
         # Both are derived from the same VERSION file, so they cannot disagree
@@ -190,7 +318,10 @@ class WhatThePackageMustBe(unittest.TestCase):
                 assemble(
                     Path(raw),
                     version="0.0.5",
-                    images=(("omi.signed.bin", signed_image(version=(0, 0, 4, 0))),),
+                    images=(
+                        ("omi.signed.bin", signed_image(version=(0, 0, 4, 0))),
+                        ("ipc_radio.bin", RADIO_BLOB),
+                    ),
                 )
 
         self.assertIn("0.0.4+0", str(refusal.exception))
@@ -203,7 +334,7 @@ class WhatThePackageMustBe(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             with self.assertRaises(Refused):
-                assemble(directory, kinds=("netcore",))
+                assemble(directory, entries=[dict(APP_CORE, board="somebody_else")])
 
             self.assertEqual(list((directory / "out").glob("*.zip")), [])
 
@@ -223,6 +354,7 @@ class TheThreeFiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             asset = assemble(Path(raw), version="1.2.3", images=(
                 ("omi.signed.bin", signed_image(version=(1, 2, 3, 0))),
+                ("ipc_radio.bin", RADIO_BLOB),
             ))[0]
 
             self.assertEqual(asset.name, "Shard_CV1_appcore_v1.2.3.zip")
@@ -294,6 +426,130 @@ class TheThreeFiles(unittest.TestCase):
             manifest = assemble(Path(raw))[1].read_text(encoding="utf-8")
 
             self.assertNotIn("KEY_VALUE", manifest)
+
+
+class NarrowingTheBuildPackage(unittest.TestCase):
+    """The first real candidate run, kept as a test.
+
+    sysbuild builds both cores into one DFU package and always has. The release
+    line publishes the application core alone — 0.0.3 is that shape. Between the
+    two there is a narrowing, and until the first real run nothing performed it
+    and no test modelled the input that needed it.
+    """
+
+    def released(self, directory):
+        """Assemble from the real two-image build package and open the asset."""
+        asset = assemble(directory)[0]
+        return zipfile.ZipFile(asset)
+
+    def test_the_real_two_image_build_package_is_accepted(self):
+        # What the first candidate run was handed, and refused.
+        with tempfile.TemporaryDirectory() as raw:
+            with self.released(Path(raw)) as release:
+                self.assertIn("omi.signed.bin", release.namelist())
+
+    def test_the_radio_core_is_not_published(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with self.released(Path(raw)) as release:
+                self.assertNotIn("ipc_radio.bin", release.namelist())
+
+    def test_the_asset_holds_exactly_the_image_and_its_manifest(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with self.released(Path(raw)) as release:
+                self.assertEqual(
+                    sorted(release.namelist()), ["manifest.json", "omi.signed.bin"]
+                )
+
+    def test_the_manifest_declares_the_application_core_alone(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with self.released(Path(raw)) as release:
+                manifest = json.loads(release.read("manifest.json"))
+
+            self.assertEqual(len(manifest["files"]), 1)
+            entry = manifest["files"][0]
+            self.assertEqual(entry["file"], "omi.signed.bin")
+            self.assertEqual(entry["image_index"], "0")
+            self.assertEqual(entry["board"], "omi")
+
+    def test_the_surviving_entry_is_copied_rather_than_rebuilt(self):
+        # What a device reads about an image it is about to write is the build's
+        # own description of it, field for field.
+        with tempfile.TemporaryDirectory() as raw:
+            with self.released(Path(raw)) as release:
+                entry = json.loads(release.read("manifest.json"))["files"][0]
+
+            self.assertEqual(entry, APP_CORE)
+
+    def test_the_rest_of_the_manifest_survives(self):
+        with tempfile.TemporaryDirectory() as raw:
+            with self.released(Path(raw)) as release:
+                manifest = json.loads(release.read("manifest.json"))
+
+            self.assertEqual(manifest["name"], "omi")
+            self.assertEqual(manifest["format-version"], 1)
+
+    def test_the_image_bytes_are_the_ones_that_were_built(self):
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            asset = assemble(directory)[0]
+
+            with zipfile.ZipFile(directory / "dfu_application.zip") as built:
+                original = built.read("omi.signed.bin")
+            with zipfile.ZipFile(asset) as release:
+                self.assertEqual(release.read("omi.signed.bin"), original)
+
+    def test_the_same_build_package_always_yields_the_same_asset(self):
+        # A release is identified by its hashes. Two runs over one build package
+        # must not produce two different files.
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            built = package(directory / "dfu_application.zip")
+
+            digests = []
+            for run in ("one", "two"):
+                asset = write_release(
+                    package=built,
+                    out=directory / run,
+                    version="0.0.4",
+                    tag="shard-cv1-v0.0.4",
+                    commit="935ff3db",
+                    built_at="2026-08-17T09:00:00Z",
+                    ncs="v2.9.0",
+                    container="ghcr.io/zephyrproject-rtos/ci@sha256:b0ac63",
+                )[0]
+                digests.append(sha256_file(asset))
+
+            self.assertEqual(digests[0], digests[1])
+
+    def test_the_sums_describe_the_narrowed_asset(self):
+        # The hashes must be of the file that is uploaded, not of the build
+        # package it was derived from.
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            asset, manifest, sums = assemble(directory)
+
+            recorded = dict(
+                reversed(line.split("  ", 1))
+                for line in sums.read_text(encoding="utf-8").splitlines()
+            )
+            self.assertEqual(recorded[asset.name], sha256_file(asset))
+            self.assertNotEqual(
+                sha256_file(asset), sha256_file(directory / "dfu_application.zip")
+            )
+            self.assertIn(sha256_file(asset), manifest.read_text(encoding="utf-8"))
+
+    def test_it_has_the_shape_the_published_release_has(self):
+        # 0.0.3 as the compatibility reference: one application-core image, one
+        # manifest entry, no radio core. Read from this repository's own record
+        # of it rather than from an artefact nobody here can open.
+        with tempfile.TemporaryDirectory() as raw:
+            with self.released(Path(raw)) as release:
+                names = sorted(release.namelist())
+                manifest = json.loads(release.read("manifest.json"))
+
+        self.assertEqual(names, ["manifest.json", "omi.signed.bin"])
+        self.assertEqual([f["type"] for f in manifest["files"]], ["application"])
+        self.assertEqual(sorted(manifest), ["files", "format-version", "name", "time"])
 
 
 if __name__ == "__main__":

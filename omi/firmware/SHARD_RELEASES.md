@@ -287,6 +287,30 @@ mistaken for an Omi OTA asset by anything scanning for the conventional name.
 
 ## 3. What a release contains
 
+### The build package is not the release package
+
+sysbuild builds **both cores** into one DFU package: the application core at
+image index 0 and the radio core at index 1, both declared `application` in its
+manifest. `SB_CONFIG_NETCORE_APP_UPDATE=y` has always been set and is not
+changed for the sake of a release.
+
+**Shard CV 1 0.0.x publishes the application core alone.** 0.0.3 is that shape —
+one image, one manifest entry, no radio core — and Orb's uploader has only ever
+been proven for the one-image case.
+
+So there is a narrowing between the build and the release, and
+`scripts/ci/make_shard_release.py` owns it. It selects the application core by
+what the build's own manifest says — index 0, board `omi` — never by counting
+files or taking the first `.bin`, and it copies the surviving manifest entry
+rather than rebuilding it.
+
+**The radio core is a permitted build input and never a release component.** An
+image the release line does not know — a third core, a different board at index
+0, two entries at index 0 — **stops the release**. Dropping an unrecognised
+image quietly would be a decision about what a Shard release contains, made by
+omission; adding one is a decision that belongs here, in writing, before it
+reaches a device that has no cable.
+
 ### The release is three files
 
 A published release carries exactly these, and together they *are* the release:

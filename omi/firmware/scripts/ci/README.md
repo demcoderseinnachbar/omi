@@ -133,11 +133,23 @@ All four run without dependencies, in CI and by hand alike:
   version, and whether that release is still unclaimed. Answers `release`,
   `no release` or a refusal; uncertainty is never `release`.
 - `make_shard_release.py` — assembles the three files of §3 from one build, reads
-  the MCUboot header and TLV trailer, and refuses a package that is not the
-  application core alone or whose image disagrees with the version being
-  released. Recomputes the payload hash rather than transcribing it.
+  the MCUboot header and TLV trailer, and refuses a package whose image
+  disagrees with the version being released. Recomputes the payload hash rather
+  than transcribing it.
 
-Their tests are `test_*.py` beside them: `python3 -m unittest` in this directory,
+  It also **narrows** the build package: sysbuild writes both cores into
+  `dfu_application.zip`, and the release carries the application core alone. The
+  application core is chosen from the build manifest by index and board, the
+  radio core is a known input that is not published, and any other image stops
+  the release. Why, and why the build is not changed instead, is §3.
+
+Their tests model the **build package as sysbuild writes it**, both cores and
+all, not a fixture already reduced to the release shape. The earlier fixtures
+described the output; every test passed and the first real candidate run refused
+the input. A packager test that models only its own output cannot fail on the
+thing a packager exists to handle.
+
+The tests are `test_*.py` beside them: `python3 -m unittest` in this directory,
 no arguments, no dependencies.
 
 ### Doing it by hand
