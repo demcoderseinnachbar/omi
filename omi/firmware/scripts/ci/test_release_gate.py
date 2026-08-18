@@ -173,7 +173,7 @@ class TheFirstCandidateOnABranchWithoutAVersion(unittest.TestCase):
         os.chdir(self.repo)
         try:
             with contextlib.redirect_stdout(io.StringIO()) as out:
-                code = main(["release_gate.py", before])
+                code = main(["release_gate.py", "push", before])
             return code, out.getvalue()
         finally:
             os.chdir(here)
@@ -251,6 +251,193 @@ class TheFirstCandidateOnABranchWithoutAVersion(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("release=false", out)
 
+
+
+class RecoveringAFailedCandidate(unittest.TestCase):
+    """The real 0.0.4 recovery, kept as a test.
+
+    A candidate run can fail before it drafts anything. The version it was for
+    is then stuck: `main` moves on carrying the same VERSION, the rise the push
+    gate looks for never comes back, and no later push can produce that
+    candidate. Raising the version to get another attempt would spend a number
+    on nothing and claim a change that did not happen.
+
+    So `recovery` mode asks a different question — is this version newer than
+    the one that is *published* — and it is reached only by a deliberate manual
+    run. The push path is untouched, which the last two tests here pin down.
+    """
+
+    def git(self, *args):
+        subprocess.run(
+            ["git", *args], cwd=self.repo, check=True, capture_output=True, text=True
+        )
+
+    def write(self, path, text):
+        full = os.path.join(self.repo, path)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def gate(self, *argv):
+        here = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                code = main(["release_gate.py", *argv])
+            return code, out.getvalue()
+        finally:
+            os.chdir(here)
+
+    def commit(self, message, version=None, source=None):
+        if version is not None:
+            self.write(VERSION_FILE, version_file(patch=version))
+        if source is not None:
+            self.write(SOURCE, source)
+        self.git("add", "-A")
+        self.git("commit", "-qm", message)
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "gate@example.invalid")
+        self.git("config", "user.name", "Gate Test")
+
+        # 0.0.3, published: the tag exists and is the baseline a recovery run
+        # measures against.
+        self.commit("the released 0.0.3", version=3, source="int shipped(void);")
+        self.git("tag", "-a", TAG_PREFIX + "0.0.3", "-m", "released")
+
+        # The push that raised the version. Its candidate run failed before
+        # drafting anything, which leaves no trace here — that is the point.
+        self.before_the_fix = self.commit("raise VERSION to 0.0.4", version=4)
+
+        # The pipeline fix. Same VERSION, no firmware touched.
+        self.write("omi/firmware/scripts/ci/make_shard_release.py", "# fixed")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "fix the packager")
+
+    def test_the_push_after_the_fix_produces_nothing(self):
+        # A: what actually happened. Correct, and the reason recovery exists.
+        code, out = self.gate("push", self.before_the_fix)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("unchanged at 0.0.4", out)
+        self.assertIn("release=false", out)
+
+    def test_a_recovery_run_rebuilds_the_same_unpublished_candidate(self):
+        # B: the version is newer than the published one and unclaimed, so the
+        # candidate it was always owed can still be built — without touching
+        # VERSION.
+        code, out = self.gate("recovery")
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("rose 0.0.3 -> 0.0.4", out)
+        self.assertIn("release=true", out)
+        self.assertIn("tag=" + TAG_PREFIX + "0.0.4", out)
+
+    def test_a_recovery_run_never_supersedes(self):
+        # A retry is not the branch overtaking a draft, so the workflow must
+        # never be told the firmware moved on.
+        _, out = self.gate("recovery")
+
+        self.assertIn("firmware_changed=false", out)
+
+    def test_a_recovery_run_at_the_published_version_produces_nothing(self):
+        # C: nothing is owed. The published version is not rebuilt.
+        self.commit("back to the published version", version=3)
+
+        code, out = self.gate("recovery")
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("unchanged at 0.0.3", out)
+        self.assertIn("release=false", out)
+
+    def test_a_recovery_run_below_the_published_version_is_refused(self):
+        # D: a device on 0.0.3 could never take 0.0.2.
+        self.commit("go backwards", version=2)
+
+        code, out = self.gate("recovery")
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("went backwards", out)
+
+    def test_a_recovery_run_without_any_release_invents_no_baseline(self):
+        # E: nothing published, so nothing established. Never a release.
+        self.git("tag", "-d", TAG_PREFIX + "0.0.3")
+
+        code, out = self.gate("recovery")
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("No previous VERSION to compare with", out)
+        self.assertIn("release=false", out)
+
+    def test_a_recovery_run_will_not_reclaim_a_published_version(self):
+        # The invariant a retry must never break: a tagged version is spent.
+        self.commit("back to the published version", version=3)
+        self.git("tag", "-a", TAG_PREFIX + "0.0.4", "-m", "published later")
+        self.commit("and up again", version=4)
+
+        code, out = self.gate("recovery")
+
+        self.assertEqual(code, 1, out)
+        self.assertIn("already exists", out)
+
+    def test_the_ordinary_rise_still_produces_a_candidate(self):
+        # F: the automatic path is untouched.
+        before = self.commit("no change", source="int shipped(void); /* x */")
+        self.commit("raise to 0.0.5", version=5)
+
+        code, out = self.gate("push", before)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("rose 0.0.4 -> 0.0.5", out)
+        self.assertIn("release=true", out)
+
+    def test_an_ordinary_push_without_a_rise_still_produces_nothing(self):
+        # G: and it is still quiet the rest of the time.
+        before = self.commit("documentation only", source="int shipped(void); /* a */")
+        self.commit("more documentation", source="int shipped(void); /* y */")
+
+        code, out = self.gate("push", before)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("release=false", out)
+
+
+class HowTheGateIsCalled(unittest.TestCase):
+    """The mode is named, never inferred from the number of arguments."""
+
+    def run_gate(self, *argv):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = main(["release_gate.py", *argv])
+        return code, out.getvalue()
+
+    def test_a_bare_ref_is_not_a_mode(self):
+        code, out = self.run_gate("HEAD~1")
+
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", out)
+
+    def test_push_without_a_ref_is_refused(self):
+        code, out = self.run_gate("push")
+
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", out)
+
+    def test_recovery_takes_no_ref(self):
+        code, out = self.run_gate("recovery", "HEAD~1")
+
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", out)
 
 if __name__ == "__main__":
     unittest.main()

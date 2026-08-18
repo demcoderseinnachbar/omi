@@ -517,6 +517,23 @@ release *is* the archive.
    **draft release**. **It gets no tag**: its identity is its hashes, and they
    are in the `RELEASE_MANIFEST.md` attached beside it. Locally, that step is
    `make_shard_release.py`.
+
+   **A candidate run that fails before it drafts anything does not spend the
+   version.** The push gate looks for a rise against the commit before it, and
+   once `main` has moved on carrying the same `VERSION` that rise is gone — no
+   later push can produce that candidate. The version is still owed: nothing
+   published it, no tag claims it, and the firmware it names has not changed.
+
+   So the same unpublished `VERSION` is built again, from the fixed pipeline,
+   through the **Shard release candidate** workflow's manual run. It takes no
+   inputs; the version comes from `omi/firmware/omi/VERSION` as it does for a
+   push, and it builds a candidate only when that version is newer than the
+   newest published one and unclaimed. A published release or an existing draft
+   for it still refuses, exactly as on the automatic path.
+
+   **The version is never raised to get another attempt**, and a candidate is
+   never assembled by hand. Both would put a number on firmware nobody built
+   that way.
 5. Point Orb at exactly this artefact: the package into `app/assets/firmware/`,
    the version, image version and archive hash into the firmware registry.
 6. Run Orb's gates — analyzer, tests, and the test that hashes the shipped
