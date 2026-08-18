@@ -89,7 +89,7 @@ what.
 
 | | Runs on | Does |
 |---|---|---|
-| [`firmware_build_check.yml`](../../../../.github/workflows/firmware_build_check.yml) | every push to `main` / `feat/**` and every PR touching `omi/firmware/**` | builds, checks the partitions, runs the haptic ownership tests on `native_sim`. Publishes nothing, uploads nothing, reads no secret |
+| [`firmware_build_check.yml`](../../../../.github/workflows/firmware_build_check.yml) | every push to `main` / `feat/**` and every PR touching `omi/firmware/**` | checks C formatting, builds, checks the partitions, runs the haptic ownership tests on `native_sim`. Publishes nothing, uploads nothing, reads no secret |
 | [`firmware_version_gate.yml`](../../../../.github/workflows/firmware_version_gate.yml) | pull requests touching `omi/firmware/**` | refuses a firmware change that forgot to raise `VERSION` |
 | [`shard_release_candidate.yml`](../../../../.github/workflows/shard_release_candidate.yml) | pushes to `main` that raise `VERSION` | builds, assembles the release, attaches it to a **draft**. Never publishes and never tags |
 | the same workflow | pushes to `main` that change the firmware **without** raising `VERSION` | marks an existing draft `SUPERSEDED` and fails, so it cannot be published as though it were current |
@@ -97,6 +97,18 @@ what.
 The build itself is described once, in
 [`.github/actions/build-shard-firmware`](../../../../.github/actions/build-shard-firmware/action.yml),
 and both workflows call it. Change how the firmware is built there.
+
+**Formatting is asked about on the branch, not first on the pull request.**
+`Repo Checks / Formatting` refuses badly formatted C when a PR is opened; the
+build check asks the same question on every push, where the answer is still
+cheap. It is the same question on purpose — same runner image and therefore the
+same `clang-format`, same `--dry-run --Werror`, and the same file-selection
+expression. The style itself is `.clang-format` and is defined nowhere else.
+
+Changed files only: the inherited Omi sources were never formatted to this
+configuration, so a whole-tree check would fail forever. `scripts/pre-push` runs
+the same check locally, but **skips silently when `clang-format` is not
+installed** — which is exactly how a new file reached a pull request unchecked.
 
 ### Scripts
 

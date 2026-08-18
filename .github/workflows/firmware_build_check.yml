@@ -45,6 +45,10 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The formatting step below compares with the merge base, which needs
+          # history on both sides. A shallow clone has neither.
+          fetch-depth: 0
 
       # Before the long part, and deliberately also on `push` where
       # `firmware_version_gate.yml` does not run: the build below trusts
@@ -54,6 +58,36 @@ jobs:
       - name: Check the gates themselves
         working-directory: omi/firmware/scripts/ci
         run: python3 -m unittest --verbose
+
+      # `Repo Checks / Formatting` already refuses badly formatted C on a pull
+      # request. By then the branch has been pushed, reviewed and rebuilt, and
+      # the finding is about whitespace. This asks the same question on every
+      # push to `feat/**`, which is where the answer is still cheap.
+      #
+      # **Deliberately the same question, not a second one.** Same runner image,
+      # so the same `clang-format` binary; same `--dry-run --Werror`; the same
+      # file-selection expression, copied rather than narrowed so that a file
+      # this passes can never be one the pull request rejects. The rules
+      # themselves live where they already lived, in `.clang-format`. Nothing
+      # here defines a style.
+      #
+      # Changed files only. The inherited Omi sources under `omi/` were never
+      # formatted to this configuration — checking the tree would fail forever
+      # and reformatting it would be a change nobody asked for.
+      - name: Check C formatting the way the pull request will
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          base=$(git merge-base origin/main HEAD)
+          FILES=$(git diff --name-only "$base" HEAD \
+            | grep -E '^(omi|omiGlass)/.*\.(c|cpp|cc|cxx|h|hpp)$' \
+            | while IFS= read -r f; do [ -f "$f" ] && echo "$f"; done || true)
+          if [ -z "$FILES" ]; then
+            echo "No C/C++ file changed against main."
+            exit 0
+          fi
+          echo "$FILES"
+          echo "$FILES" | xargs clang-format --dry-run --Werror
 
       - name: Build and check the partitions
         id: firmware
