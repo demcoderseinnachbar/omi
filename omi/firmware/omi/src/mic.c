@@ -495,8 +495,7 @@ static void aad_thread_fn(void *p1, void *p2, void *p3)
 
         /* Re-check the hold here as well as at the request: the request was made
          * one mic frame ago and a recording may have started since. */
-        if (atomic_cas(&aad_req_sleep, 1, 0) && !atomic_get(&aad_in_sleep) &&
-            !atomic_get(&mic_hold)) {
+        if (atomic_cas(&aad_req_sleep, 1, 0) && !atomic_get(&aad_in_sleep) && !atomic_get(&mic_hold)) {
             enter_hw_aad();
         }
 
