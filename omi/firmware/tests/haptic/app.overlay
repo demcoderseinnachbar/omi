@@ -1,0 +1,14 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	/*
+	 * The motor, as the firmware expects to find it: same node label and
+	 * same binding as boards/omi/omi_nrf5340_cpuapp.dts, moved onto
+	 * native_sim's emulated controller so the pin can be read back.
+	 */
+	motor_pin: motor {
+		compatible = "nordic,gpio-pins";
+		gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+	};
+};
