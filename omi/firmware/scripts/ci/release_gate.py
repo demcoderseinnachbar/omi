@@ -187,24 +187,43 @@ def _emit(**values: str) -> None:
         print(line)
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(f"usage: {argv[0] if argv else 'release_gate.py'} <before-ref>")
-        return 2
+PUSH = "push"
+RECOVERY = "recovery"
 
-    before = argv[1]
+
+def main(argv: list[str]) -> int:
+    usage = (
+        f"usage: {argv[0] if argv else 'release_gate.py'} "
+        f"{{{PUSH} <before-ref> | {RECOVERY}}}"
+    )
+    mode = argv[1] if len(argv) > 1 else ""
+
+    if mode == RECOVERY:
+        if len(argv) != 2:
+            print(usage)
+            return 2
+        before = ""
+    elif mode == PUSH:
+        if len(argv) != 3:
+            print(usage)
+            return 2
+        before = argv[2]
+    else:
+        print(usage)
+        return 2
 
     # A push that created the branch reports an all-zero "before", and a
     # rewritten history reports a commit that is no longer there. The previous
     # commit is the honest fallback; when even that is absent there is nothing
     # to compare with and the answer is no release, never a release.
-    try:
-        _git("rev-parse", "--verify", f"{before}^{{commit}}")
-    except subprocess.CalledProcessError:
+    if mode == PUSH:
         try:
-            before = _git("rev-parse", "--verify", "HEAD~1^{commit}").strip()
+            _git("rev-parse", "--verify", f"{before}^{{commit}}")
         except subprocess.CalledProcessError:
-            before = ""
+            try:
+                before = _git("rev-parse", "--verify", "HEAD~1^{commit}").strip()
+            except subprocess.CalledProcessError:
+                before = ""
 
     tags = _git("tag", "--list", f"{TAG_PREFIX}*").split()
 
@@ -242,6 +261,10 @@ def main(argv: list[str]) -> int:
     # number that already has a draft leaves that draft describing bytes the
     # branch no longer has. The workflow uses this to mark such a draft rather
     # than let it wait quietly to be published.
+    # Only a push has a previous commit to compare with. A recovery run is a
+    # deliberate retry of a version nothing has published, not the branch moving
+    # past a draft, so it never reports the firmware as having changed and never
+    # supersedes anything.
     changed = _git("diff", "--name-only", before, "HEAD").split() if before else []
     firmware_changed = any(is_firmware_change(path) for path in changed)
 

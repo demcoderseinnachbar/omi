@@ -31,6 +31,17 @@ on:
     branches: [main]
     paths:
       - 'omi/firmware/**'
+  # Recovery, and only that. A candidate run can fail before it drafts anything
+  # — a broken packager, a runner that dies — and the version it was for is then
+  # stuck: `main` moves on with the same VERSION, the rise never comes back, and
+  # nothing else can produce that candidate. Raising the version to get another
+  # attempt would spend a number on nothing and claim a change that did not
+  # happen, so this exists instead.
+  #
+  # **It takes no inputs.** The version comes from `omi/firmware/omi/VERSION` on
+  # the ref this runs against, exactly as it does for a push; a version somebody
+  # typed is a version nothing derived.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -62,11 +73,24 @@ jobs:
         working-directory: omi/firmware/scripts/ci
         run: python3 -m unittest --verbose
 
-      - name: Decide whether this push is a release
+      # Two modes, named rather than inferred. A push asks whether the version
+      # rose against the commit before it. A recovery run has no such commit and
+      # asks the only question that still means anything: is this version newer
+      # than the one that is published, and unclaimed. The guards are the same
+      # either way — a backwards version and an existing tag are refused in
+      # both, and the draft check below runs whatever started the job.
+      - name: Decide whether this run is a release
         id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          python3 omi/firmware/scripts/ci/release_gate.py \
-            "${{ github.event.before }}"
+          set -euo pipefail
+          if [ "$EVENT_NAME" = 'workflow_dispatch' ]; then
+            python3 omi/firmware/scripts/ci/release_gate.py recovery
+          else
+            python3 omi/firmware/scripts/ci/release_gate.py push "$BEFORE"
+          fi
 
   candidate:
     name: Build and draft the release
@@ -196,7 +220,10 @@ jobs:
   supersede:
     name: Mark a draft the branch has moved past
     needs: gate
+    # Only a push can overtake a draft. A recovery run is a deliberate retry of
+    # a version nothing has published; it never marks anything superseded.
     if: >-
+      github.event_name == 'push' &&
       needs.gate.outputs.release == 'false' &&
       needs.gate.outputs.firmware_changed == 'true' &&
       needs.gate.outputs.tag != ''

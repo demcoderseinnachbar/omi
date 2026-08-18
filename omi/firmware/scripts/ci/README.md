@@ -91,7 +91,7 @@ what.
 |---|---|---|
 | [`firmware_build_check.yml`](../../../../.github/workflows/firmware_build_check.yml) | every push to `main` / `feat/**` and every PR touching `omi/firmware/**` | checks C formatting, builds, checks the partitions, runs the haptic ownership tests on `native_sim`. Publishes nothing, uploads nothing, reads no secret |
 | [`firmware_version_gate.yml`](../../../../.github/workflows/firmware_version_gate.yml) | pull requests touching `omi/firmware/**` | refuses a firmware change that forgot to raise `VERSION` |
-| [`shard_release_candidate.yml`](../../../../.github/workflows/shard_release_candidate.yml) | pushes to `main` that raise `VERSION` | builds, assembles the release, attaches it to a **draft**. Never publishes and never tags |
+| [`shard_release_candidate.yml`](../../../../.github/workflows/shard_release_candidate.yml) | pushes to `main` that raise `VERSION`, and a manual run for recovery | builds, assembles the release, attaches it to a **draft**. Never publishes and never tags |
 | the same workflow | pushes to `main` that change the firmware **without** raising `VERSION` | marks an existing draft `SUPERSEDED` and fails, so it cannot be published as though it were current |
 
 The build itself is described once, in
@@ -129,9 +129,17 @@ All four run without dependencies, in CI and by hand alike:
   without it the *first* candidate could never be recognised as a rise.
 - `partition_gate.py <partitions.yml>` — refuses a build whose `settings_storage`
   or `littlefs_storage` moved. Reads the **generated** table, not `pm_static.yml`.
-- `release_gate.py <before-ref>` — decides whether a push to `main` raised the
-  version, and whether that release is still unclaimed. Answers `release`,
-  `no release` or a refusal; uncertainty is never `release`.
+- `release_gate.py push <before-ref>` / `release_gate.py recovery` — decides
+  whether this run is a release. Answers `release`, `no release` or a refusal;
+  uncertainty is never `release`.
+
+  `push` compares with the commit before it: did the version rise, and is the
+  release it implies unclaimed. `recovery` has no such commit and compares with
+  the newest published tag instead — for a candidate whose first run failed
+  before drafting anything, where the rise is gone but the version is still
+  owed. It is reached only by running **Shard release candidate** manually, it
+  takes no inputs, and it never reports the firmware as changed, so it can
+  never supersede a draft. Why this exists rather than a version bump is §5.
 - `make_shard_release.py` — assembles the three files of §3 from one build, reads
   the MCUboot header and TLV trailer, and refuses a package whose image
   disagrees with the version being released. Recomputes the payload hash rather
