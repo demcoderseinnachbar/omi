@@ -368,6 +368,13 @@ artefact: every other check compares a constant with a literal, both written by
 the same hand at the same moment, and passes just as happily when the package
 beside it is a rebuild, a candidate, or the previous version under a new name.
 
+**And the other way round: every firmware package under `app/assets/firmware/`
+must belong to a registry entry.** A package stays in the bundle when a version
+moves on unless somebody deletes it — `0.0.3` did, for as long as `0.0.4` was
+already the entry. Nothing loads it, so nothing notices: it simply ships inside
+the app, indistinguishable in a file list from the one that is real. That is
+the confusion §5 warns about, arriving from the other side.
+
 This is written down because it was once only assumed. Until firmware 0.0.4 the
 sentence here claimed such a test existed; the test that was pointed at
 compared registry constants with each other and read no file at all. The claim
