@@ -357,8 +357,21 @@ For a published version the two must be **byte-for-byte identical**, and the
 archive SHA-256 recorded in `app/lib/devices/firmware/shard_firmware.dart` must
 equal the one attached to the release. **A difference is a release error, not a
 variant** — one of the two is then not the firmware anybody signed off, and
-there is no way to tell which from the outside. An Orb test reads the shipped
-package from disk and hashes it, so the two cannot drift apart silently.
+there is no way to tell which from the outside.
+
+**A registry entry may only name an asset whose real bytes are checked by an
+automated test.** `app/test/devices/firmware_asset_test.dart` reads the package
+from disk, hashes it, and compares with the `archiveSha256` of the entry that
+names it — the registry stays the single source of truth for the value, and the
+test never restates it. Nothing else in Orb can tell the registry from the
+artefact: every other check compares a constant with a literal, both written by
+the same hand at the same moment, and passes just as happily when the package
+beside it is a rebuild, a candidate, or the previous version under a new name.
+
+This is written down because it was once only assumed. Until firmware 0.0.4 the
+sentence here claimed such a test existed; the test that was pointed at
+compared registry constants with each other and read no file at all. The claim
+was true of the intent and false of the code for as long as nobody looked.
 
 ### What the package contains
 
