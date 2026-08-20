@@ -670,7 +670,7 @@ and `0.0.3` remains the current one.
 | Orb's gates | **done** — analyzer, 1062 tests, the asset guard hashing the shipped bytes |
 | Release commit fixed | **done** — `9d491a57eb5e8337162e4c33958b642243243880` |
 | Annotated tag `shard-cv1-v0.0.4` | **not done** |
-| GitHub release | **not done** — the draft that held these files **no longer exists** |
+| GitHub release | **not done** — the draft `Shard CV1 0.0.4` exists, unpublished, carrying the three assets |
 | Download-back verification (§5 steps 12–14) | **not done** — nothing is published to download |
 
 #### The artefact this refers to
@@ -698,18 +698,17 @@ carries and the archive that was downloaded from the draft are byte-identical,
 and the payload hash was read out of the image's own TLV trailer rather than
 transcribed.
 
-#### The draft is gone, and no rebuild may replace it
+#### The draft, and why no rebuild may replace it
 
-The draft release that carried these three files was removed at some point
-between 2026-08-19 and 2026-08-20. **Nothing in this fork can do that
-automatically:** no workflow contains a release deletion, `supersede` could not
-fire for any of the three merges since (all were documentation or workflow
-changes, so `firmware_changed` was false), and the candidate runs after the
-draft are green rather than red. It was removed by hand.
+The draft release **`Shard CV1 0.0.4` exists and is unpublished.** Three assets
+are visible on it: `RELEASE_MANIFEST.md`, `SHA256SUMS` and
+`Shard_CV1_appcore_v0.0.4.zip`.
 
-The three files survive locally because they were downloaded from the draft
-before it disappeared, and the archive additionally survives byte-identical in
-Orb's bundle.
+**The bytes currently on that draft have not been downloaded back and checked
+against the accepted ones.** What is verified is a copy taken from the draft on
+2026-08-19, which is byte-identical to the archive in Orb's bundle — and a local
+copy only ever proves what was meant to be published. §5 steps 12 to 14 are
+therefore still open, and they are the reason they exist.
 
 **A rebuild is not a substitute and must never be used as one.** MCUboot signs
 with RSA-PSS, whose salt is random, and the DFU manifest records the build time
