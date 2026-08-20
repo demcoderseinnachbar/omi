@@ -656,6 +656,139 @@ new version.
 
 ## Status
 
+### 0.0.4 — **`ACCEPTED ON HARDWARE, NOT RELEASED`**
+
+Steps 1 to 7 of §5 are done. **Steps 8 to 15 are not**, so this is not a release
+and `0.0.3` remains the current one.
+
+| Step | State |
+|---|---|
+| Built by CI from `main` | **done** — run `32174812652`, `workflow_dispatch`, success, 2026-08-18T19:07:03Z |
+| Candidate assembled | **done** — the three files of §3 |
+| Accepted on hardware | **done** — see below |
+| Orb points at exactly this artefact | **done** — `app/assets/firmware/Shard_CV1_appcore_v0.0.4.zip`, byte-identical, `cmp` clean |
+| Orb's gates | **done** — analyzer, 1062 tests, the asset guard hashing the shipped bytes |
+| Release commit fixed | **done** — `9d491a57eb5e8337162e4c33958b642243243880` |
+| Annotated tag `shard-cv1-v0.0.4` | **not done** |
+| GitHub release | **not done** — the draft that held these files **no longer exists** |
+| Download-back verification (§5 steps 12–14) | **not done** — nothing is published to download |
+
+#### The artefact this refers to
+
+Every hash below was taken from the files themselves, not copied from the
+manifest.
+
+| | |
+|---|---|
+| Product | Shard CV 1 |
+| Version | `0.0.4`, image `0.0.4+0` |
+| Firmware commit | `9d491a57eb5e8337162e4c33958b642243243880` |
+| Intended tag | `shard-cv1-v0.0.4` |
+| Archive | `Shard_CV1_appcore_v0.0.4.zip`, 249,871 bytes |
+| Archive SHA-256 | `9e644a756208ffe780deee3204837de6e52b28af3683b8cf4cd2a15108eec14b` |
+| Signed image | `omi.signed.bin`, 249,148 bytes |
+| Signed image SHA-256 | `cdf6f1e68f10e1111c28031886687d0ecd51de2953d7c4715ff6ab00d886c452` |
+| Payload SHA-256 (image TLV) | `e725f8f1523b413781a72dedd84a23da876a468150edb9804ba88b54892b0316` |
+| Toolchain | nRF Connect SDK `v2.9.0`, sysbuild, MCUboot, RSA-2048 PSS |
+| Container | `ghcr.io/zephyrproject-rtos/ci:v0.26.13@sha256:b0ac6334d1926cd0971a0a444f7adc6dd020e88ee3ce865aa070b6475a3ac4eb` |
+| Package contents | `manifest.json` + one image at index 0, board `omi` — **no radio core** |
+
+**These exact bytes are the ones that went onto a device.** The archive Orb
+carries and the archive that was downloaded from the draft are byte-identical,
+and the payload hash was read out of the image's own TLV trailer rather than
+transcribed.
+
+#### The draft is gone, and no rebuild may replace it
+
+The draft release that carried these three files was removed at some point
+between 2026-08-19 and 2026-08-20. **Nothing in this fork can do that
+automatically:** no workflow contains a release deletion, `supersede` could not
+fire for any of the three merges since (all were documentation or workflow
+changes, so `firmware_changed` was false), and the candidate runs after the
+draft are green rather than red. It was removed by hand.
+
+The three files survive locally because they were downloaded from the draft
+before it disappeared, and the archive additionally survives byte-identical in
+Orb's bundle.
+
+**A rebuild is not a substitute and must never be used as one.** MCUboot signs
+with RSA-PSS, whose salt is random, and the DFU manifest records the build time
+— a rebuild of this same commit produces a different archive and a different
+image hash while the payload stays the same. It would therefore not be the
+artefact that was accepted on hardware, and §5 step 11 forbids swapping the
+package for one.
+
+#### Hardware acceptance
+
+`0.0.3` → `0.0.4` over Orb's automatic OTA path on **2026-08-19**, on a
+**Samsung Galaxy A25 (SM-A256B)** with the pendant `E7:2D:36:5A:B1:D3`.
+
+Orb read the device, decided `shouldUpdate` on its own and installed without
+being asked. The upload, one reboot and the reconnect took about thirty seconds;
+afterwards a fresh device-information read reported model `Shard CV 1`,
+manufacturer `Unicorn Production` and firmware revision **`0.0.4`**, and the
+updater reached `completed` — a state only reachable when that read matches what
+the registry expects.
+
+Established in the same session, on the updated device:
+
+- **Boot and BLE.** The pendant came back after the reboot, services were
+  rediscovered, and the link stayed up with battery notifications arriving
+  every five seconds.
+- **Button.** Six presses produced six button events with no duplicates.
+- **Microphone and audio transport.** Three recordings of 5.9 s, 7.5 s and
+  8.3 s delivered 299, 380 and 418 frames with **no frame loss** — every frame
+  that arrived reached the app.
+- **The whole pipeline.** All three recordings became Sparks with real
+  transcripts through the ordinary upload and processing path.
+
+What was **not** measured, and is therefore not claimed:
+
+- **The battery gate is still unverified on hardware.** The run happened at
+  100 %. An OTA below and above the 60 % threshold, and a device that will not
+  report its charge, remain untested — as they were for `0.0.3`.
+- **`mic_gain` and `dim_ratio` were not read.** No path exposes them.
+- **The LED was not observed.**
+- **Only one pendant exists.** Nothing here distinguishes a trait of this
+  specimen from a trait of the hardware.
+
+#### The haptics on this firmware
+
+**Everything Orb does is verified, and the physical result is not.**
+
+After a genuine app defect was found and fixed — `DeviceCaptureRecorder` and
+`CaptureController` both confirmed the same capture edge, so one press asked the
+motor twice — a controlled retest was run against these bytes. Six capture edges
+produced **exactly six** haptic requests, six started GATT writes and six
+callbacks with `status=0`, with **no refusals, no `busy` and no duplicates**, and
+the levels alternated correctly between short for a start and long for an end.
+The command path is therefore verified up to and including the pendant's ATT
+acknowledgement.
+
+**During that retest none of the six pulses was perceptible.** Later, on the
+same firmware, the haptics worked again after the pendant was tapped mechanically
+against a table.
+
+**No cause is claimed** — not the motor, not a solder joint, not a contact, not
+the driver, not the GPIO, and not `haptic.c`. The mechanical sensitivity is a
+strong indication of an intermittent hardware or contact fault **on this
+specimen**, and an indication is not a finding. This continues the same picture
+recorded under `0.0.3` and does not resolve it: **the investigation stays closed
+until a second pendant exists.**
+
+What this does settle is where the boundary lies. `status=0` says the device
+acknowledged the write; it says nothing about whether the motor turned, and no
+link can report that. Everything on Orb's side of that boundary is now
+observable — `OrbBleProof` carries `request → write started → callback` per
+numbered request, and the developer page keeps a bounded history in which a
+later success never erases an earlier failure.
+
+**Firmware `0.0.4` is accepted in software.** Whether it is published while the
+haptics of the one available pendant behave this way is a product decision, not
+a technical one.
+
+---
+
 ### 0.0.3 — **`RELEASE COMPLETE`**
 
 Every step of §5 is done and verified against what was actually published, not
