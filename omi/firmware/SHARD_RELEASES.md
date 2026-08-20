@@ -422,6 +422,30 @@ firmware.** They cannot answer that, and stating it that way would be wrong in
 the one direction that matters: two honest rebuilds look different, so an
 inequality would be read as tampering when it is only a new salt.
 
+### Open: the network core image does not rebuild identically
+
+Four clean builds of the same tree in the pinned container produced **four
+different payload hashes for `ipc_radio.bin`**, the network core image. The
+application core was identical across all four:
+
+```
+omi.signed.bin  payload_sha256=e725f8f1523b413781a72dedd84a23da876a468150edb9804ba88b54892b0316
+```
+
+This is not the salt effect described above. That one leaves the payload hash
+alone, and the payload hash is exactly what moved.
+
+**Not a release blocker, for a narrow reason:** `dfu_application.zip` carries
+both images, but a Shard release is the application core alone —
+`write_app_core_package` extracts it, and `read_package` refuses a package
+holding a second image. Nothing `ipc_radio.bin` contains reaches a device on
+this release line.
+
+Written down because it stops being harmless if the network core is ever
+shipped, and because anyone reproducing a build and comparing the whole package
+would otherwise read it as a broken build rather than as this. Observed
+2026-08-20 while measuring build times; no cause established, nothing attempted.
+
 ---
 
 ## 4. Release body
