@@ -49,6 +49,22 @@ jobs:
           # The formatting step below compares with the merge base, which needs
           # history on both sides. A shallow clone has neither.
           fetch-depth: 0
+          # Every commit, none of the historical file contents. This repository
+          # carries 1.29 GiB of history in 359k objects; cloning it with a
+          # checkout measured 164 s and 1.3 GB against 74 s and 595 MB filtered.
+          # This job's git questions are `merge-base` and `diff --name-only`,
+          # which read commits and trees and never a historical blob, and the
+          # files clang-format reads are the checked-out ones, which are here
+          # either way. Anything else git needs it fetches on demand.
+          #
+          # Deliberately **not** done in `firmware_version_gate.yml`: that gate
+          # reads `VERSION` out of the target branch with `git show`, which is a
+          # historical blob, and `version_gate.py` treats a failed read as "the
+          # file did not exist". Making that read depend on the network would
+          # let a fetch failure look like a missing version, and this gate is
+          # the one standing between a forgotten bump and devices that can
+          # never receive the release.
+          filter: blob:none
 
       # Before the long part, and deliberately also on `push` where
       # `firmware_version_gate.yml` does not run: the build below trusts

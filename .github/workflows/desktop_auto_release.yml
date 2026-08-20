@@ -16,6 +16,10 @@ permissions:
 
 jobs:
   plan-release:
+    # Fail closed in forks: the release train tags and promotes the Omi desktop
+    # app through self-hosted macOS runners and secrets that exist only in the
+    # upstream repository. Here it can do nothing but fail, hourly.
+    if: github.repository == 'BasedHardware/omi'
     runs-on: ubuntu-latest
     # Allow the full CI gate wait (default 60m) plus planner overhead.
     timeout-minutes: 75

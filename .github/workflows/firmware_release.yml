@@ -78,6 +78,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # This workflow belongs to the Omi CV1 track: it publishes an
+      # `Omi_CV1_v…` release whose OTA asset the Omi backend serves to Omi
+      # users. In this fork `omi/firmware/omi/` no longer builds that product —
+      # it builds Shard, with a different device name, model and manufacturer.
+      #
+      # Left alone, a run with an explicit `version` input would build Shard
+      # firmware and publish it as an Omi release. Somebody else's pendant
+      # would then be offered our bytes. It would also `sed` a literal
+      # `CONFIG_BT_DIS_FW_REV_STR` back into `omi.conf`, which is the exact
+      # defect SHARD_RELEASES.md §1 records as already having happened once.
+      #
+      # Fail closed: refuse when the tree carries Shard identity. Nothing here
+      # decides *how* to publish Shard — that is `shard_release_candidate.yml`,
+      # and the two must never be confused for one another.
+      - name: Refuse to publish Shard firmware as an Omi release
+        run: |
+          set -euo pipefail
+          CONF=omi/firmware/omi/omi.conf
+          if grep -qE '^CONFIG_BT_DIS_(MODEL="Shard|MANUF="Unicorn Production")' "$CONF"; then
+            echo "::error::$CONF carries Shard product identity, so this tree does not build Omi CV1 firmware. Publishing it as an Omi_CV1_v… release would offer Shard bytes to Omi users. Shard is released by shard_release_candidate.yml; see omi/firmware/SHARD_RELEASES.md."
+            exit 1
+          fi
+          echo "No Shard identity in $CONF — this tree builds Omi CV1."
+
       - name: Resolve version and tag
         id: meta
         env:
