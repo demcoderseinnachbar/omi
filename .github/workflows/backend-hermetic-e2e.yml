@@ -25,7 +25,23 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          # The scope decision compares with the pull request's base, which
+          # needs history on both sides. A shallow clone has neither.
           fetch-depth: 0
+          # Every commit, none of the historical file contents. **Without this
+          # the job cannot finish inside its own timeout:** this repository
+          # carries 1.29 GiB of history in 359k objects, and cloning it with a
+          # checkout measured 164 s against the 120 s allowed below. The job was
+          # therefore cancelled on every run, and `merge-gate` — correctly fail
+          # closed — reported a red check for pull requests it had never looked
+          # at.
+          #
+          # Safe because of what this job asks git: `cat-file -e` on the base
+          # commit and `diff --name-only base...HEAD`, which read commits and
+          # trees and never a historical blob. Anything else git needs it
+          # fetches on demand. Same reasoning and same measurement as
+          # `firmware_build_check.yml`.
+          filter: blob:none
 
       - name: Decide whether hermetic backend coverage applies
         id: scope
