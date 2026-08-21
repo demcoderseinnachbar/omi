@@ -155,3 +155,12 @@ Key rules:
 - `AGENT_FLUTTER_LOG` must point to flutter run stdout (not logcat).
 - Prefer `find type X` / `find key "name"` over hardcoded `@ref`. Add `Key('descriptive_name')` to new interactive widgets.
 - Full command reference: `agent-flutter schema`.
+
+## Firmware OTA (CV1)
+
+OTA lives in [`firmware_mixin.dart`](lib/pages/home/firmware_mixin.dart), not an external tool — a missing `mcumgr`/`nrfutil` CLI proves nothing.
+
+- `startDfu` branches on `isLegacySecureDFU`: `nordic_dfu` (legacy) or `mcumgr_flutter` (MCUboot/SMP over BLE).
+- **`eraseAppSettings: true`** is set there. Never call an OTA settings-preserving without checking what that partition holds.
+- `imageIndex` in `manifest.json` is a **string**, defaults to `"0"` (app core), and is required only for multi-file packages — which is why app-core-only ones work.
+- Update detection asks the backend by model and manufacturer; unrecognised hardware is offered nothing. Keep that separate from a manual flash.
