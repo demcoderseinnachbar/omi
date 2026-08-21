@@ -41,7 +41,7 @@ The ten questions this file exists to answer:
 | 9 | What is the single source of truth? | The GitHub release. | this section |
 | 10 | How is an RC or a rebuild kept out? | Never trust a filename. Full path, hash before upload, hash the download after. | [§5](#never-publish-an-rc-or-a-rebuild) |
 
-**The current release is `0.0.3`.** See [Status](#status).
+**The current release is `0.0.4`.** See [Status](#status).
 
 ---
 
@@ -51,7 +51,7 @@ The ten questions this file exists to answer:
 |---|---|---|
 | `CONFIG_BT_DEVICE_NAME` | `Omi` | `Shard` |
 | `CONFIG_BT_DIS_MODEL` | `Omi CV 1` | `Shard CV 1` |
-| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | `0.0.3` |
+| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | `0.0.4` |
 
 The version restarts at `0.0.x` deliberately. It is not a continuation of the
 Omi version line — it is a different product identity with its own history, and
@@ -105,10 +105,10 @@ would have carried it to a device.
 One file decides every version a Shard reports or carries:
 
 ```
-omi/firmware/omi/VERSION            (0.0.3, VERSION_TWEAK 0)
-    ├─ MCUBOOT_IMGTOOL_SIGN_VERSION  →  image header      0.0.3+0
-    ├─ the DFU manifest              →  version_MCUBOOT   0.0.3+0
-    └─ CONFIG_BT_DIS_FW_REV_STR      →  BLE DIS revision  0.0.3
+omi/firmware/omi/VERSION            (0.0.4, VERSION_TWEAK 0)
+    ├─ MCUBOOT_IMGTOOL_SIGN_VERSION  →  image header      0.0.4+0
+    ├─ the DFU manifest              →  version_MCUBOOT   0.0.4+0
+    └─ CONFIG_BT_DIS_FW_REV_STR      →  BLE DIS revision  0.0.4
 ```
 
 Both derivations are **defaults**, and neither value is typed anywhere.
@@ -136,7 +136,7 @@ fork sets `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION`;
 `zephyr/modules/Kconfig.mcuboot` defaults it to `$(APP_VERSION_TWEAK_STRING)`
 whenever `VERSION_MAJOR` is non-empty, which is the same VERSION file in its
 tweak form. That is where the `+0` comes from, and why the image and the DFU
-manifest both read `0.0.3+0` while the DIS reads `0.0.3`.
+manifest both read `0.0.4+0` while the DIS reads `0.0.4`.
 
 The two forms differ on purpose: the build number belongs to the bootloader, and
 what a device says it is running is the product version.
@@ -239,10 +239,16 @@ asset:   Shard_CV1_appcore_v<version>.zip
 For the current release:
 
 ```
-tag:     shard-cv1-v0.0.3
-release: Shard CV1 v0.0.3
-asset:   Shard_CV1_appcore_v0.0.3.zip
+tag:     shard-cv1-v0.0.4
+release: Shard CV1 0.0.4
+asset:   Shard_CV1_appcore_v0.0.4.zip
 ```
+
+The release title reads `Shard CV1 0.0.4` and not `Shard CV1 v0.0.4`, which is
+what the pattern above asks for. It is written down as it is rather than
+corrected: the release is published, and renaming a published release to match a
+document would change the record to fit the description. **The tag and the asset
+name — the two a machine reads — follow the pattern exactly.**
 
 ### What a tag means
 
@@ -656,10 +662,10 @@ new version.
 
 ## Status
 
-### 0.0.4 — **`ACCEPTED ON HARDWARE, NOT RELEASED`**
+### 0.0.4 — **`RELEASE COMPLETE`**
 
-Steps 1 to 7 of §5 are done. **Steps 8 to 15 are not**, so this is not a release
-and `0.0.3` remains the current one.
+Every step of §5 is done and verified against what was actually published, not
+against the local copies. Nothing follows.
 
 | Step | State |
 |---|---|
@@ -669,9 +675,28 @@ and `0.0.3` remains the current one.
 | Orb points at exactly this artefact | **done** — `app/assets/firmware/Shard_CV1_appcore_v0.0.4.zip`, byte-identical, `cmp` clean |
 | Orb's gates | **done** — analyzer, 1062 tests, the asset guard hashing the shipped bytes |
 | Release commit fixed | **done** — `9d491a57eb5e8337162e4c33958b642243243880` |
-| Annotated tag `shard-cv1-v0.0.4` | **not done** |
-| GitHub release | **not done** — the draft `Shard CV1 0.0.4` exists, unpublished, carrying the three assets |
-| Download-back verification (§5 steps 12–14) | **not done** — nothing is published to download |
+| Annotated tag `shard-cv1-v0.0.4` | **done**, dereferencing to `9d491a57eb…` — checked as `^{commit}`, not by the tag object's own id |
+| Tag pushed | **done** — verified remotely, `refs/tags/shard-cv1-v0.0.4^{}` = `9d491a57eb…` |
+| GitHub release `Shard CV1 0.0.4` | **done** — id `372606091`, published `2026-08-20T19:43:16Z`, not a draft, not a pre-release |
+| `Shard_CV1_appcore_v0.0.4.zip` attached | **done** — verified `9e644a75…` |
+| `RELEASE_MANIFEST.md` attached | **done** — verified `e03ac95e…` |
+| `SHA256SUMS` attached | **done** — verified `c2a9a825…` |
+| `sha256sum -c SHA256SUMS` on the download | **done** — both `OK` |
+| Orb delivery copy identical to the published package | **done** — byte-for-byte, 0 differing bytes |
+
+Release: https://github.com/demcoderseinnachbar/omi/releases/tag/shard-cv1-v0.0.4
+
+All three hashes were taken from files **downloaded back from GitHub** into a
+fresh directory, not from the copies they were uploaded from — the archive with
+`Get-FileHash`, the signed image over the unpacked bytes, and the payload read
+out of the image's own TLV trailer rather than transcribed from the manifest.
+
+The tag is on the build commit and not on the branch head. Later commits — this
+document among them — sit after it and are not part of the release. **The tag is
+never moved to include them.**
+
+The firmware for `0.0.4` is frozen. Anything further changes a version number
+first.
 
 #### The artefact this refers to
 
@@ -698,17 +723,12 @@ carries and the archive that was downloaded from the draft are byte-identical,
 and the payload hash was read out of the image's own TLV trailer rather than
 transcribed.
 
-#### The draft, and why no rebuild may replace it
+#### Why no rebuild may replace these bytes
 
-The draft release **`Shard CV1 0.0.4` exists and is unpublished.** Three assets
-are visible on it: `RELEASE_MANIFEST.md`, `SHA256SUMS` and
-`Shard_CV1_appcore_v0.0.4.zip`.
-
-**The bytes currently on that draft have not been downloaded back and checked
-against the accepted ones.** What is verified is a copy taken from the draft on
-2026-08-19, which is byte-identical to the archive in Orb's bundle — and a local
-copy only ever proves what was meant to be published. §5 steps 12 to 14 are
-therefore still open, and they are the reason they exist.
+The three files were drafted by the candidate run, sat on the draft until the
+hardware acceptance was done, and were published unchanged — never re-uploaded,
+never rebuilt. The download-back verification confirms it from the other side:
+what GitHub serves is byte-for-byte what Orb carries.
 
 **A rebuild is not a substitute and must never be used as one.** MCUboot signs
 with RSA-PSS, whose salt is random, and the DFU manifest records the build time
