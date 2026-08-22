@@ -171,3 +171,219 @@ ZTEST(haptic_ownership, test_the_five_second_cap_still_holds)
 
     play_haptic_milli(0);
 }
+
+/*
+ * The capture alarm.
+ *
+ * A second suite in this file rather than a directory of its own, because the
+ * alarm is the same motor under the same ownership rule -- and because a pattern
+ * that repeats is the first thing in this firmware to ask `play_haptic_milli()`
+ * for a pulse while an earlier one may still be pending. The rule proved above
+ * is exactly what has to keep holding.
+ *
+ * What is deliberately *not* here: `_transport_disconnected()` and
+ * `check_button_level()`. Both live in translation units that reach the radio,
+ * the microphone, the SD card and `sys_poweroff()`. So the rules they carry are
+ * expressed as functions the alarm owns -- `haptic_alarm_on_disconnect()` and
+ * `haptic_alarm_owns_button()` -- and what remains at each call site is a single
+ * line with nothing left to decide.
+ */
+
+static void reset_alarm(void *fixture)
+{
+    ARG_UNUSED(fixture);
+
+    haptic_alarm_stop();
+    (void) k_work_cancel_delayable_sync(&haptic_off_work, &(struct k_work_sync){0});
+    play_haptic_milli(0);
+    zassert_false(haptic_alarm_active(), "a test started with the alarm still raised");
+    zassert_false(motor_on(), "a test started with the motor still on");
+}
+
+ZTEST_SUITE(haptic_alarm, NULL, init_haptic, reset_alarm, NULL, NULL);
+
+/* Losing the link mid-recording is the whole reason this exists. */
+ZTEST(haptic_alarm, test_a_disconnect_while_recording_raises_the_alarm)
+{
+    haptic_alarm_on_disconnect(true);
+
+    zassert_true(haptic_alarm_active(), "the alarm was not raised");
+}
+
+/* Losing the link at rest is not a failure and must stay silent. */
+ZTEST(haptic_alarm, test_b_a_disconnect_at_rest_raises_nothing)
+{
+    haptic_alarm_on_disconnect(false);
+
+    zassert_false(haptic_alarm_active(), "an idle disconnect raised an alarm");
+
+    k_sleep(K_MSEC(ALARM_PULSE_MS + ALARM_GAP_MS + 100));
+    zassert_false(motor_on(), "an idle disconnect drove the motor");
+}
+
+/*
+ * C -- the pattern, observed rather than assumed.
+ *
+ * Two full periods are watched at the pin: on for the pulse, off for the gap,
+ * on again. A single pulse would pass a test that only looked once.
+ */
+ZTEST(haptic_alarm, test_c_the_alarm_repeats_until_it_is_answered)
+{
+    haptic_alarm_on_disconnect(true);
+
+    /* First pulse. */
+    k_sleep(K_MSEC(ALARM_PULSE_MS / 2));
+    zassert_true(motor_on(), "the first alarm pulse never started");
+
+    /* Its gap. */
+    k_sleep(K_MSEC(ALARM_PULSE_MS));
+    zassert_false(motor_on(), "the alarm did not pause between pulses");
+
+    /* Second pulse -- this is what makes it a pattern. */
+    k_sleep(K_MSEC(ALARM_GAP_MS));
+    zassert_true(motor_on(), "the alarm did not repeat");
+
+    zassert_true(haptic_alarm_active(), "the alarm gave up on its own");
+}
+
+/* Nobody pressed anything, so it is still going a long time later. */
+ZTEST(haptic_alarm, test_d_the_alarm_does_not_time_out)
+{
+    haptic_alarm_on_disconnect(true);
+
+    k_sleep(K_MSEC((ALARM_PULSE_MS + ALARM_GAP_MS) * 6));
+
+    zassert_true(haptic_alarm_active(), "the alarm stopped without being answered");
+}
+
+/* The press answers it, and the motor stops with it. */
+ZTEST(haptic_alarm, test_e_a_press_clears_the_alarm_and_the_motor)
+{
+    haptic_alarm_on_disconnect(true);
+    k_sleep(K_MSEC(ALARM_PULSE_MS / 2));
+    zassert_true(motor_on(), "the alarm never started");
+
+    (void) haptic_alarm_owns_button(true);
+
+    zassert_false(haptic_alarm_active(), "the press did not clear the alarm");
+    zassert_false(motor_on(), "the motor kept running after the alarm was answered");
+
+    /* And it stays clear -- no further pulse is scheduled. */
+    k_sleep(K_MSEC((ALARM_PULSE_MS + ALARM_GAP_MS) * 2));
+    zassert_false(motor_on(), "a pulse arrived after the alarm was answered");
+}
+
+/*
+ * F -- the reason the alarm has to own the button at all.
+ *
+ * Orb reads `1` and `2` -- single and double tap -- as "record". If the press
+ * that answers an alarm produced either, answering would start a recording
+ * nobody asked for. So for as long as the alarm owns this press, the button
+ * reports nothing.
+ */
+ZTEST(haptic_alarm, test_f_the_answering_press_belongs_to_the_alarm)
+{
+    haptic_alarm_on_disconnect(true);
+
+    zassert_true(haptic_alarm_owns_button(true), "the alarm did not claim the press");
+
+    /* Held down: still the alarm's, every sampling period. */
+    zassert_true(haptic_alarm_owns_button(true), "the alarm let go while still held");
+    zassert_true(haptic_alarm_owns_button(true), "the alarm let go while still held");
+}
+
+/* The release belongs to the same press, or the tap logic would see half a cycle. */
+ZTEST(haptic_alarm, test_g_the_release_belongs_to_it_too)
+{
+    haptic_alarm_on_disconnect(true);
+    (void) haptic_alarm_owns_button(true);
+
+    zassert_true(haptic_alarm_owns_button(false), "the release was not consumed");
+}
+
+/* And the moment the finger is off, the button belongs to the person again. */
+ZTEST(haptic_alarm, test_h_the_next_press_is_a_normal_one)
+{
+    haptic_alarm_on_disconnect(true);
+    (void) haptic_alarm_owns_button(true);
+    (void) haptic_alarm_owns_button(false);
+
+    zassert_false(haptic_alarm_owns_button(true), "a later press was still swallowed");
+    zassert_false(haptic_alarm_owns_button(false), "a later release was still swallowed");
+}
+
+/* With no alarm raised, the alarm never touches the button. */
+ZTEST(haptic_alarm, test_i_without_an_alarm_the_button_is_untouched)
+{
+    zassert_false(haptic_alarm_owns_button(true), "the button was claimed with no alarm");
+    zassert_false(haptic_alarm_owns_button(false), "the release was claimed with no alarm");
+}
+
+/*
+ * J -- the alarm is not a message, so nothing here needs a connection.
+ *
+ * Nothing in this suite calls `bt_enable()`; the host is linked but no radio is
+ * up and no connection exists. That the alarm runs at all under those conditions
+ * is the property, and it is the one the whole slice is for.
+ */
+ZTEST(haptic_alarm, test_j_the_alarm_needs_no_connection)
+{
+    haptic_alarm_on_disconnect(true);
+    k_sleep(K_MSEC(ALARM_PULSE_MS / 2));
+
+    zassert_true(motor_on(), "the alarm stayed silent without a connection");
+    zassert_true(haptic_alarm_active(), "the alarm needs a link it should not need");
+}
+
+/*
+ * K -- a reconnect must not quietly answer it.
+ *
+ * There is no clear-on-connect: the alarm has exactly one way out, and that is a
+ * finger. Expressed here as the absence of any effect from the only call the
+ * transport layer makes into the alarm.
+ */
+ZTEST(haptic_alarm, test_k_a_reconnect_does_not_clear_the_alarm)
+{
+    haptic_alarm_on_disconnect(true);
+
+    /* A link comes and goes again with nothing recording. It may not help. */
+    haptic_alarm_on_disconnect(false);
+
+    zassert_true(haptic_alarm_active(), "a later idle disconnect cleared the alarm");
+
+    k_sleep(K_MSEC(ALARM_PULSE_MS / 2));
+    zassert_true(motor_on(), "the alarm went quiet after a reconnect");
+}
+
+/* The three values Orb already writes keep meaning what they meant. */
+ZTEST(haptic_alarm, test_l_the_existing_protocol_is_unchanged)
+{
+    const uint8_t levels[] = {1, 2, 3};
+    const uint32_t expected[] = {100, 300, 500};
+
+    for (int i = 0; i < 3; i++) {
+        const int64_t before = k_uptime_ticks();
+
+        zassert_equal(haptic_write_handler(NULL, NULL, &levels[i], 1, 0, 0), 1, "level %d was refused", levels[i]);
+        zassert_true(motor_on(), "level %d did not start the motor", levels[i]);
+
+        const int64_t want = before + k_ms_to_ticks_ceil64(expected[i]);
+        zassert_true(haptic_off_at >= want - k_ms_to_ticks_ceil64(20) &&
+                         haptic_off_at <= want + k_ms_to_ticks_ceil64(20),
+                     "level %d no longer lasts %u ms",
+                     levels[i],
+                     expected[i]);
+
+        play_haptic_milli(0);
+    }
+}
+
+/* An unknown value is still refused rather than guessed at. */
+ZTEST(haptic_alarm, test_m_an_unknown_level_still_does_nothing)
+{
+    const uint8_t unknown = 99;
+
+    zassert_equal(
+        haptic_write_handler(NULL, NULL, &unknown, 1, 0, 0), 1, "an unknown level was answered with an error");
+    zassert_false(motor_on(), "an unknown level drove the motor");
+}

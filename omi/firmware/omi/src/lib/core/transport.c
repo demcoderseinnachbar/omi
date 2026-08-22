@@ -773,6 +773,13 @@ static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
     k_work_cancel_delayable(&mtu_recheck_work);
     mtu_recheck_attempts = 0;
 
+    /* Asked before the hold is released, because the hold *is* the answer: it is
+     * how this firmware knows a recording was under way. A link that goes away
+     * mid-recording is a critical capture failure, and the phone cannot report
+     * it -- it is the half that just disappeared. So the device says so itself,
+     * and keeps saying it until somebody presses the button. */
+    haptic_alarm_on_disconnect(mic_hold_active());
+
     /* A recording hold belongs to the connection that asked for it. Releasing it
      * here is what makes a crashed app, a flat phone or somebody walking out of
      * range safe: none of them can send a STOP, and without this the microphone
