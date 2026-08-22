@@ -50,6 +50,10 @@ env:
 jobs:
   scope:
     name: Decide backend deployment scope
+    # Fail closed in forks: this deploys the Omi backend into GCP projects and
+    # reads Firestore through credentials that exist only in the upstream
+    # repository. Here it can do nothing but fail after every push to main.
+    if: github.repository == 'BasedHardware/omi'
     # This unprivileged decision runs before source admission, Firestore
     # readiness, image work, or any cloud mutation. workflow_run does not
     # support a safe workflow-level paths filter, so inspect its immutable SHA.

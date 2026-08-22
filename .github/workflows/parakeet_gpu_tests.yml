@@ -26,6 +26,9 @@ env:
 
 jobs:
   gpu-tests:
+    # Fail closed in forks: the GPU suite authenticates into the upstream GKE
+    # cluster. Here it fails at `Google Auth`, nightly.
+    if: github.repository == 'BasedHardware/omi'
     environment: development
     permissions:
       contents: 'read'
