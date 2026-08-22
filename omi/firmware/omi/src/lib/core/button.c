@@ -174,6 +174,14 @@ void check_button_level(struct k_work *work_item)
 
     u_int8_t btn_state = was_pressed ? BUTTON_PRESSED : BUTTON_RELEASED;
 
+    /* Asked every period, before anything is decided about the press. If an
+     * alarm is raised, the first press answers it here -- immediately, not after
+     * the double-tap window -- and that whole press belongs to the alarm. The
+     * detection below still runs on it, so a long press can still switch the
+     * device off; what it must not do is *tell the phone*, because Orb reads a
+     * single and a double tap as "record". */
+    const bool alarm_owns = haptic_alarm_owns_button(btn_state == BUTTON_PRESSED);
+
     ButtonEvent event = BUTTON_EVENT_NONE;
 
     // Debouncing pressed state
@@ -215,7 +223,7 @@ void check_button_level(struct k_work *work_item)
     }
 
     // Single tap
-    if (event == BUTTON_EVENT_SINGLE_TAP) {
+    if (event == BUTTON_EVENT_SINGLE_TAP && !alarm_owns) {
         LOG_INF("single tap detected\n");
         btn_last_event = event;
 
@@ -223,7 +231,7 @@ void check_button_level(struct k_work *work_item)
     }
 
     // Double tap
-    if (event == BUTTON_EVENT_DOUBLE_TAP) {
+    if (event == BUTTON_EVENT_DOUBLE_TAP && !alarm_owns) {
         LOG_INF("double tap detected\n");
         btn_last_event = event;
         notify_double_tap();
@@ -240,7 +248,13 @@ void check_button_level(struct k_work *work_item)
     if (event == BUTTON_EVENT_RELEASE && btn_last_event != BUTTON_EVENT_RELEASE) {
         LOG_PRINTK("release detected\n");
         btn_last_event = event;
-        notify_unpress();
+
+        /* The reset below still runs when the alarm owned this press: the cycle
+         * has to end cleanly, or its leftovers would colour the next tap. Only
+         * the notification is withheld. */
+        if (!alarm_owns) {
+            notify_unpress();
+        }
 
         // Reset
         current_time = 0;

@@ -50,6 +50,11 @@ static void haptic_off_work_handler(struct k_work *work)
     }
 }
 
+// The capture alarm's own delayable item, declared here because haptic_init()
+// below arms it. Everything it does lives at the bottom of this file.
+static struct k_work_delayable alarm_work;
+static void alarm_work_handler(struct k_work *work);
+
 // BLE Service definitions
 static void haptic_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value);
 static ssize_t haptic_write_handler(struct bt_conn *conn,
@@ -125,6 +130,7 @@ int haptic_init(void)
 
     // Initialize the delayable work item
     k_work_init_delayable(&haptic_off_work, haptic_off_work_handler);
+    k_work_init_delayable(&alarm_work, alarm_work_handler);
 
     LOG_INF("Haptic system initialized");
     return 0;
@@ -198,4 +204,100 @@ void register_haptic_service(void)
 void haptic_off()
 {
     gpio_pin_set_dt(&haptic_pin, 0);
+}
+
+// The capture alarm.
+//
+// Its own delayable item rather than a second user of haptic_off_work: that one
+// carries the deadline of whichever pulse owns the motor, and a repeat that
+// moved it would be the very race the ownership rule above exists to prevent.
+// This item schedules *pulses*; each pulse still ends itself through
+// play_haptic_milli(), which stays the only way the motor is ever driven.
+
+// Raised and unanswered.
+static bool alarm_raised;
+
+// Whether the press currently under way belongs to the alarm. Set when a press
+// answers one, cleared when the finger comes off, and never true without a
+// press having started it.
+static bool alarm_owns_press;
+
+// No lock guards these two. The only caller that clears them is the button,
+// whose check_button_level() runs on the system workqueue -- the same queue
+// alarm_work runs on, which serialises them. The only caller that sets them is
+// the disconnect callback, and it can do nothing but raise an alarm that is
+// already raised. A missed pulse would be harmless anyway; a stuck motor would
+// not be, and that remains impossible because every pulse ends itself.
+static void alarm_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    if (!alarm_raised) {
+        return;
+    }
+
+    play_haptic_milli(ALARM_PULSE_MS);
+    k_work_reschedule(&alarm_work, K_MSEC(ALARM_PULSE_MS + ALARM_GAP_MS));
+}
+
+void haptic_alarm_start(void)
+{
+    if (alarm_raised) {
+        return;
+    }
+
+    alarm_raised = true;
+    LOG_WRN("Capture alarm raised");
+    k_work_reschedule(&alarm_work, K_NO_WAIT);
+}
+
+void haptic_alarm_stop(void)
+{
+    alarm_owns_press = false;
+
+    if (!alarm_raised) {
+        return;
+    }
+
+    alarm_raised = false;
+    (void) k_work_cancel_delayable(&alarm_work);
+
+    // Ends the pulse that is playing right now. Going through
+    // play_haptic_milli(0) rather than haptic_off() moves the deadline too, so a
+    // handler still in flight finds it reached and agrees the motor is off.
+    play_haptic_milli(0);
+
+    LOG_INF("Capture alarm answered");
+}
+
+bool haptic_alarm_active(void)
+{
+    return alarm_raised;
+}
+
+void haptic_alarm_on_disconnect(bool was_recording)
+{
+    if (!was_recording) {
+        return;
+    }
+
+    haptic_alarm_start();
+}
+
+bool haptic_alarm_owns_button(bool pressed)
+{
+    if (!pressed) {
+        const bool was_ours = alarm_owns_press;
+
+        alarm_owns_press = false;
+        return was_ours;
+    }
+
+    if (alarm_raised) {
+        // Answering clears alarm_owns_press, so claiming the press comes after.
+        haptic_alarm_stop();
+        alarm_owns_press = true;
+    }
+
+    return alarm_owns_press;
 }
