@@ -16,6 +16,11 @@ permissions:
 
 jobs:
   pulse:
+    # Fail closed in forks: this job commits the history line and pushes it to
+    # `main`, then opens a tracking issue. A fork has neither that history to
+    # keep nor an issue tracker to open — it moved the branch head weekly and
+    # failed afterwards on a disabled tracker, which is the worst of both.
+    if: github.repository == 'BasedHardware/omi'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

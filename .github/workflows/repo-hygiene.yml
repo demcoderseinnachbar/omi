@@ -27,6 +27,12 @@ concurrency:
 jobs:
   failure-class-retirement:
     name: Failure-class retirement
+    # Fail closed in forks: the retirement diff reads an event feed that only a
+    # repository with ongoing merges produces, and the script treats an empty
+    # feed as a defect rather than as a quiet week. In a fork whose `main`
+    # nobody merges into, that assertion is true every Monday and always will
+    # be — a red run that reports the fork's own inactivity.
+    if: github.repository == 'BasedHardware/omi'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
