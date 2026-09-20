@@ -25,6 +25,7 @@
 #include "config.h"
 #include "features.h"
 #include "haptic.h"
+#include "led.h"
 #include "mic.h"
 #ifdef CONFIG_OMI_ENABLE_MONITOR
 #include "monitor.h"
@@ -107,6 +108,23 @@ static ssize_t settings_mic_gain_read_handler(struct bt_conn *conn,
                                               void *buf,
                                               uint16_t len,
                                               uint16_t offset);
+static ssize_t settings_stealth_write_handler(struct bt_conn *conn,
+                                              const struct bt_gatt_attr *attr,
+                                              const void *buf,
+                                              uint16_t len,
+                                              uint16_t offset,
+                                              uint8_t flags);
+static ssize_t settings_stealth_read_handler(struct bt_conn *conn,
+                                             const struct bt_gatt_attr *attr,
+                                             void *buf,
+                                             uint16_t len,
+                                             uint16_t offset);
+static ssize_t settings_led_signal_write_handler(struct bt_conn *conn,
+                                                 const struct bt_gatt_attr *attr,
+                                                 const void *buf,
+                                                 uint16_t len,
+                                                 uint16_t offset,
+                                                 uint8_t flags);
 static void charging_status_ccc_config_changed_handler(const struct bt_gatt_attr *attr, uint16_t value);
 static ssize_t settings_charging_status_read_handler(struct bt_conn *conn,
                                                      const struct bt_gatt_attr *attr,
@@ -202,7 +220,28 @@ static struct bt_uuid_128 settings_mic_gain_characteristic_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10012, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
 static struct bt_uuid_128 settings_charging_status_characteristic_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10013, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+/*
+ * Two characteristics, and they stay two.
+ *
+ * 0x19B10014 is a stored state: it survives a restart, and reading it is how a
+ * phone finds out what the device actually does rather than what it was last
+ * told. 0x19B10015 is an instruction to do something once, right now, and it
+ * is write-only because there is nothing about it to read afterwards.
+ *
+ * Keeping them apart is the point. A momentary signal must never be able to
+ * change what the device does for the rest of the week, and one value carrying
+ * both would make every such mistake a silent one.
+ */
+static struct bt_uuid_128 settings_stealth_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10014, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+static struct bt_uuid_128 settings_led_signal_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10015, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
 
+/*
+ * Appended, never inserted. `notify_charging_status()` notifies through
+ * `settings_service.attrs[6]`, so anything added ahead of it would point the
+ * charging notification at a different attribute.
+ */
 static struct bt_gatt_attr settings_service_attr[] = {
     BT_GATT_PRIMARY_SERVICE(&settings_service_uuid),
     BT_GATT_CHARACTERISTIC(&settings_dim_ratio_characteristic_uuid.uuid,
@@ -224,6 +263,18 @@ static struct bt_gatt_attr settings_service_attr[] = {
                            NULL,
                            NULL),
     BT_GATT_CCC(charging_status_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+    BT_GATT_CHARACTERISTIC(&settings_stealth_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                           settings_stealth_read_handler,
+                           settings_stealth_write_handler,
+                           NULL),
+    BT_GATT_CHARACTERISTIC(&settings_led_signal_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_WRITE,
+                           NULL,
+                           settings_led_signal_write_handler,
+                           NULL),
 };
 
 static struct bt_gatt_service settings_service = BT_GATT_SERVICE(settings_service_attr);
@@ -550,6 +601,83 @@ static ssize_t settings_mic_gain_read_handler(struct bt_conn *conn,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &current_gain, sizeof(current_gain));
 }
 
+static ssize_t settings_stealth_write_handler(struct bt_conn *conn,
+                                              const struct bt_gatt_attr *attr,
+                                              const void *buf,
+                                              uint16_t len,
+                                              uint16_t offset,
+                                              uint8_t flags)
+{
+    if (len != 1) {
+        LOG_WRN("Invalid length for stealth write: %u", len);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    uint8_t enabled = ((uint8_t *) buf)[0] ? 1U : 0U;
+
+    LOG_INF("Received new stealth setting: %u", enabled);
+    int err = app_settings_save_stealth(enabled);
+    if (err) {
+        LOG_ERR("Failed to save stealth setting: %d", err);
+    }
+
+    /*
+     * Applied at once rather than at the next tick of the status loop.
+     * Somebody who silences the device is usually looking at it while they do.
+     *
+     * Handed to a work item and not done here: repainting can sleep, and this
+     * is the thread that services the radio.
+     */
+    orb_led_refresh();
+
+    return len;
+}
+
+static ssize_t settings_stealth_read_handler(struct bt_conn *conn,
+                                             const struct bt_gatt_attr *attr,
+                                             void *buf,
+                                             uint16_t len,
+                                             uint16_t offset)
+{
+    uint8_t enabled = app_settings_get_stealth();
+    LOG_INF("Reading stealth: %u", enabled);
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, &enabled, sizeof(enabled));
+}
+
+static ssize_t settings_led_signal_write_handler(struct bt_conn *conn,
+                                                 const struct bt_gatt_attr *attr,
+                                                 const void *buf,
+                                                 uint16_t len,
+                                                 uint16_t offset,
+                                                 uint8_t flags)
+{
+    if (len != 1) {
+        LOG_WRN("Invalid length for LED signal write: %u", len);
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    uint8_t signal = ((uint8_t *) buf)[0];
+    if (signal != ORB_LED_SIGNAL_BLUE_ONCE) {
+        /*
+         * Refused rather than approximated. An unknown code from a newer phone
+         * is a request this firmware does not understand, and doing something
+         * roughly similar with it would be worse than saying so.
+         */
+        LOG_WRN("Unknown LED signal: %u", signal);
+        return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
+    }
+
+    /*
+     * A signal, and nothing more. It never writes the stealth setting: what the
+     * device does for the rest of the week is not something a momentary
+     * instruction gets to change.
+     */
+    LOG_INF("LED signal: one second of blue");
+    orb_led_signal_blue();
+
+    return len;
+}
+
 static ssize_t settings_charging_status_read_handler(struct bt_conn *conn,
                                                      const struct bt_gatt_attr *attr,
                                                      void *buf,
@@ -591,6 +719,8 @@ features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, voi
     features |= OMI_FEATURE_LED_DIMMING;
     // Mic gain control is always enabled.
     features |= OMI_FEATURE_MIC_GAIN;
+    // Stealth and the one-off signal come with this firmware.
+    features |= OMI_FEATURE_STEALTH;
 
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &features, sizeof(features));
 }

@@ -137,6 +137,32 @@ void set_led_state()
         return;
     }
 
+    /*
+     * A one-off signal owns the LED while it lasts. Nothing below may touch it:
+     * this loop runs every second, and a signal that lives exactly one second
+     * would otherwise be cut short or repainted in a status colour halfway
+     * through.
+     */
+    if (orb_led_signal_active()) {
+        return;
+    }
+
+    /*
+     * Stealth silences this display and only this one.
+     *
+     * Everything below says something continuously — connected, not connected,
+     * charging, clock not set — and that is precisely what somebody wearing the
+     * device in a room full of people has asked it to stop doing. The short
+     * signals are untouched and live elsewhere: the boot pulse and the ready
+     * fade run before this loop exists, an error blink is raised during
+     * initialisation, and the one-off blue above is asked for deliberately.
+     * Haptics, the button and what the device records are not affected at all.
+     */
+    if (app_settings_get_stealth()) {
+        led_off();
+        return;
+    }
+
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
     // If RTC not synced, blink red to warn user to connect phone app
     if (!rtc_is_valid()) {
