@@ -9,10 +9,17 @@ LOG_MODULE_REGISTER(app_settings, CONFIG_LOG_DEFAULT_LEVEL);
 // Default values if not found in flash
 #define DEFAULT_DIM_LIGHT_RATIO 50
 #define DEFAULT_MIC_GAIN 6
+/* Stealth is off unless somebody asks for it: a device out of the box behaves
+ * the way its manual describes. */
+#define DEFAULT_STEALTH 0
 
 // In-memory cache for the settings
 static uint8_t dim_light_ratio = DEFAULT_DIM_LIGHT_RATIO;
 static uint8_t mic_gain = DEFAULT_MIC_GAIN;
+/* Its own setting, deliberately not a dim_ratio of zero. How bright the LED is
+ * and whether it may speak at all are two different questions, and only one of
+ * them is a promise to the person wearing it. */
+static uint8_t stealth = DEFAULT_STEALTH;
 static struct rtc_time rtc_timestamp = {0};
 static uint64_t rtc_epoch = 0;
 
@@ -53,6 +60,18 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
         return rc;
     }
 
+    if (settings_name_steq(name, "stealth", &next) && !next) {
+        if (len != sizeof(stealth)) {
+            return -EINVAL;
+        }
+        rc = read_cb(cb_arg, &stealth, sizeof(stealth));
+        if (rc >= 0) {
+            LOG_INF("Loaded stealth: %u", stealth);
+            return 0;
+        }
+        return rc;
+    }
+
     if (settings_name_steq(name, "rtc_timestamp", &next) && !next) {
         if (len != sizeof(rtc_timestamp)) {
             return -EINVAL;
@@ -80,7 +99,7 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
             uint32_t epoch_u32 = 0;
             rc = read_cb(cb_arg, &epoch_u32, sizeof(epoch_u32));
             if (rc >= 0) {
-                rtc_epoch = (uint64_t)epoch_u32;
+                rtc_epoch = (uint64_t) epoch_u32;
                 LOG_INF("Loaded rtc_epoch(u32)=%u -> %llu", epoch_u32, rtc_epoch);
                 return 0;
             }
@@ -88,7 +107,9 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
         }
 
         LOG_WRN("rtc_epoch size mismatch: len=%u expected=%u (or legacy %u)",
-            (unsigned)len, (unsigned)sizeof(rtc_epoch), (unsigned)sizeof(uint32_t));
+                (unsigned) len,
+                (unsigned) sizeof(rtc_epoch),
+                (unsigned) sizeof(uint32_t));
         return -EINVAL;
     }
 
@@ -96,7 +117,9 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
         if (len == sizeof(lsm6dsl_time_base)) {
             rc = read_cb(cb_arg, &lsm6dsl_time_base, sizeof(lsm6dsl_time_base));
             if (rc >= 0) {
-                LOG_INF("Loaded lsm6dsl_time_base: epoch_s=%llu ts=0x%08x", lsm6dsl_time_base.epoch_s, lsm6dsl_time_base.ts);
+                LOG_INF("Loaded lsm6dsl_time_base: epoch_s=%llu ts=0x%08x",
+                        lsm6dsl_time_base.epoch_s,
+                        lsm6dsl_time_base.ts);
                 return 0;
             }
             return rc;
@@ -121,7 +144,9 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
         }
 
         LOG_WRN("lsm6dsl_time_base size mismatch: len=%u expected=%u (or legacy %u)",
-            (unsigned)len, (unsigned)sizeof(lsm6dsl_time_base), (unsigned)(sizeof(uint64_t) + sizeof(uint32_t)));
+                (unsigned) len,
+                (unsigned) sizeof(lsm6dsl_time_base),
+                (unsigned) (sizeof(uint64_t) + sizeof(uint32_t)));
         return -EINVAL;
     }
 
@@ -207,8 +232,14 @@ int app_settings_init(void)
         LOG_ERR("Failed to load app settings (err %d)", err);
     }
 
-    LOG_INF("Settings initialized. dim_ratio=%u mic_gain=%u rtc_epoch=%llu lsm6_base_epoch=%llu lsm6_base_ts=0x%08x",
-		dim_light_ratio, mic_gain, rtc_epoch, lsm6dsl_time_base.epoch_s, lsm6dsl_time_base.ts);
+    LOG_INF("Settings initialized. dim_ratio=%u mic_gain=%u stealth=%u rtc_epoch=%llu lsm6_base_epoch=%llu "
+            "lsm6_base_ts=0x%08x",
+            dim_light_ratio,
+            mic_gain,
+            stealth,
+            rtc_epoch,
+            lsm6dsl_time_base.epoch_s,
+            lsm6dsl_time_base.ts);
     return (err == -ENOENT) ? 0 : err;
 }
 
@@ -244,4 +275,21 @@ int app_settings_save_mic_gain(uint8_t new_gain)
 uint8_t app_settings_get_mic_gain(void)
 {
     return mic_gain;
+}
+
+int app_settings_save_stealth(uint8_t enabled)
+{
+    stealth = enabled ? 1U : 0U;
+    int err = settings_save_one("omi/stealth", &stealth, sizeof(stealth));
+    if (err) {
+        LOG_ERR("Failed to save stealth (err %d)", err);
+    } else {
+        LOG_INF("Saved stealth: %u", stealth);
+    }
+    return err;
+}
+
+uint8_t app_settings_get_stealth(void)
+{
+    return stealth;
 }

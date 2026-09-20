@@ -96,3 +96,87 @@ void led_off(void)
     k_msleep(10);
     set_led_blue(false);
 }
+
+/*
+ * --- The one-off signal ---
+ *
+ * A single second of blue, asked for over BLE, and deliberately not a side
+ * effect of connecting: the firmware cannot tell a phone somebody has just
+ * opened from one that reconnected by itself, because both are the same GATT
+ * connect. Which of the two it was is the app's knowledge, so the decision is
+ * the app's and this is only the means of carrying it out.
+ *
+ * It owns the LED for as long as it lasts. `set_led_state()` asks
+ * `orb_led_signal_active()` before it does anything, so the once-a-second
+ * status loop can neither cut the signal short nor repaint it in a charging or
+ * a disconnected colour. Blue is set here rather than left to whatever the
+ * status display would have shown.
+ *
+ * Its own timer, too, and not the status loop's: a second measured by a loop
+ * that ticks every second is anything between one and two.
+ */
+#define ORB_LED_SIGNAL_MS 1000
+
+/*
+ * Written from the thread that takes the BLE write, read from the main loop.
+ * `volatile` because the loop reads it once a second forever and has no other
+ * reason to reload it — a compiler that kept it in a register would guard
+ * nothing at all.
+ */
+static volatile bool signal_active = false;
+
+/* From main.c: the status display this signal interrupts and hands back to. */
+extern void set_led_state(void);
+
+static void orb_led_signal_end(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    signal_active = false;
+    /*
+     * Handed back rather than turned off. What should be shown now — nothing,
+     * while stealth is on — belongs to the status display, and waiting for its
+     * next tick would leave up to a second of darkness on a device that is not
+     * silenced at all.
+     */
+    set_led_state();
+}
+
+K_WORK_DELAYABLE_DEFINE(orb_led_signal_work, orb_led_signal_end);
+
+/*
+ * Repaint the status display, from a thread that must not be made to wait.
+ *
+ * `set_led_state()` can call `led_off()`, which sleeps twice for the PWM
+ * channels to settle. On the main loop that is nothing; on the thread that
+ * takes a BLE write it is twenty milliseconds of a radio not being serviced,
+ * and it would put a second caller of the same LEDs on a second thread. Both
+ * go away by doing the work where the signal's own timer already runs.
+ */
+static void orb_led_refresh_now(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    set_led_state();
+}
+
+K_WORK_DEFINE(orb_led_refresh_work, orb_led_refresh_now);
+
+void orb_led_refresh(void)
+{
+    k_work_submit(&orb_led_refresh_work);
+}
+
+void orb_led_signal_blue(void)
+{
+    /* The flag first: a status tick landing between these lines would otherwise
+     * paint over the signal before it was ever protected. */
+    signal_active = true;
+    set_led_red(false);
+    set_led_green(false);
+    set_led_blue(true);
+    k_work_reschedule(&orb_led_signal_work, K_MSEC(ORB_LED_SIGNAL_MS));
+}
+
+bool orb_led_signal_active(void)
+{
+    return signal_active;
+}

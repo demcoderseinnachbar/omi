@@ -44,6 +44,31 @@ int app_settings_save_mic_gain(uint8_t new_gain);
 uint8_t app_settings_get_mic_gain(void);
 
 /**
+ * @brief Save the stealth setting.
+ *
+ * Stealth silences the persistent status light: while it is on, the device
+ * stops saying whether it is connected, disconnected or charging. It does not
+ * touch the short signals — the boot pulse, the ready fade, an error blink or
+ * the one-off signal asked for over BLE — and it does not touch haptics, the
+ * button or anything the device records.
+ *
+ * It is a setting of its own and not a dim ratio of zero: brightness and
+ * silence are different questions, and this one survives a restart because the
+ * person who asked for it is still wearing the device afterwards.
+ *
+ * @param enabled Non-zero to silence the status light, zero to restore it.
+ * @return 0 on success, negative error code otherwise.
+ */
+int app_settings_save_stealth(uint8_t enabled);
+
+/**
+ * @brief Get the current stealth setting.
+ *
+ * @return 1 while the status light is silenced, 0 otherwise.
+ */
+uint8_t app_settings_get_stealth(void);
+
+/**
  * @brief Save the RTC timestamp setting.
  *
  * @param ts The new RTC timestamp.
