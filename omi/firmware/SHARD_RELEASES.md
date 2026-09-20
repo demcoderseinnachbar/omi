@@ -41,7 +41,7 @@ The ten questions this file exists to answer:
 | 9 | What is the single source of truth? | The GitHub release. | this section |
 | 10 | How is an RC or a rebuild kept out? | Never trust a filename. Full path, hash before upload, hash the download after. | [§5](#never-publish-an-rc-or-a-rebuild) |
 
-**The current release is `0.0.4`.** See [Status](#status).
+**The current release is `0.0.6`.** See [Status](#status).
 
 ---
 
@@ -51,7 +51,7 @@ The ten questions this file exists to answer:
 |---|---|---|
 | `CONFIG_BT_DEVICE_NAME` | `Omi` | `Shard` |
 | `CONFIG_BT_DIS_MODEL` | `Omi CV 1` | `Shard CV 1` |
-| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | `0.0.4` |
+| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | `0.0.6` |
 
 The version restarts at `0.0.x` deliberately. It is not a continuation of the
 Omi version line — it is a different product identity with its own history, and
@@ -105,10 +105,10 @@ would have carried it to a device.
 One file decides every version a Shard reports or carries:
 
 ```
-omi/firmware/omi/VERSION            (0.0.4, VERSION_TWEAK 0)
-    ├─ MCUBOOT_IMGTOOL_SIGN_VERSION  →  image header      0.0.4+0
-    ├─ the DFU manifest              →  version_MCUBOOT   0.0.4+0
-    └─ CONFIG_BT_DIS_FW_REV_STR      →  BLE DIS revision  0.0.4
+omi/firmware/omi/VERSION            (0.0.6, VERSION_TWEAK 0)
+    ├─ MCUBOOT_IMGTOOL_SIGN_VERSION  →  image header      0.0.6+0
+    ├─ the DFU manifest              →  version_MCUBOOT   0.0.6+0
+    └─ CONFIG_BT_DIS_FW_REV_STR      →  BLE DIS revision  0.0.6
 ```
 
 Both derivations are **defaults**, and neither value is typed anywhere.
@@ -239,14 +239,14 @@ asset:   Shard_CV1_appcore_v<version>.zip
 For the current release:
 
 ```
-tag:     shard-cv1-v0.0.4
-release: Shard CV1 0.0.4
-asset:   Shard_CV1_appcore_v0.0.4.zip
+tag:     shard-cv1-v0.0.6
+release: Shard CV1 0.0.6
+asset:   Shard_CV1_appcore_v0.0.6.zip
 ```
 
-The release title reads `Shard CV1 0.0.4` and not `Shard CV1 v0.0.4`, which is
+Every release title so far reads `Shard CV1 <version>` and not `Shard CV1 v<version>`, which is
 what the pattern above asks for. It is written down as it is rather than
-corrected: the release is published, and renaming a published release to match a
+corrected: those releases are published, and renaming a published release to match a
 document would change the record to fit the description. **The tag and the asset
 name — the two a machine reads — follow the pattern exactly.**
 
@@ -661,6 +661,132 @@ new version.
 ---
 
 ## Status
+
+### 0.0.6 — **`RELEASE COMPLETE`**
+
+Every step of §5 is done and verified against what was actually published, not
+against the local copies. Nothing follows.
+
+| Step | State |
+|---|---|
+| Built by CI from `main` | **done** — run `35497369218`, `push`, success, 2026-09-20T07:44:35Z |
+| Candidate assembled | **done** — the three files of §3, draft created 2026-09-20T07:44:36Z |
+| Accepted on hardware | **done** — see below |
+| Orb points at exactly this artefact | **done** — `app/assets/firmware/Shard_CV1_appcore_v0.0.6.zip`, byte-identical to the published download, `cmp` clean |
+| Orb's gates | **done** — analyzer clean, 2288 tests, the asset guard hashing the shipped bytes |
+| Release commit fixed | **done** — `e1d36d9b673181464817d96c6daaf7a8f53e0f75`, named by the manifest the build itself wrote |
+| Annotated tag `shard-cv1-v0.0.6` | **done**, dereferencing to `e1d36d9b67…` — checked as `^{commit}`, not by the tag object's own id |
+| Tag pushed | **done** — verified remotely, `refs/tags/shard-cv1-v0.0.6^{}` = `e1d36d9b67…` |
+| GitHub release `Shard CV1 0.0.6` | **done** — published `2026-09-20T08:37:31Z`, not a draft, not a pre-release |
+| `Shard_CV1_appcore_v0.0.6.zip` attached | **done** — verified `6c9c75c1…` |
+| `RELEASE_MANIFEST.md` attached | **done** — verified `4e4dfbd5…` |
+| `SHA256SUMS` attached | **done** — verified `19095ed9…` |
+| `sha256sum -c SHA256SUMS` on the download | **done** — both `OK` |
+| Orb delivery copy identical to the published package | **done** — byte-for-byte, 0 differing bytes |
+
+Release: https://github.com/demcoderseinnachbar/omi/releases/tag/shard-cv1-v0.0.6
+
+The published files were downloaded back into a fresh directory and hashed
+there; the byte comparison against the accepted candidate and against Orb's
+bundled copy was made on those downloads, not on the files they were uploaded
+from.
+
+The tag is on the merge commit the manifest names and not on the branch head.
+**The tag is never moved.**
+
+#### The artefact this refers to
+
+| | |
+|---|---|
+| Product | Shard CV 1 |
+| Version | `0.0.6`, image `0.0.6+0` |
+| Firmware commit | `e1d36d9b673181464817d96c6daaf7a8f53e0f75` |
+| Tag | `shard-cv1-v0.0.6` |
+| Archive | `Shard_CV1_appcore_v0.0.6.zip`, 250,579 bytes |
+| Archive SHA-256 | `6c9c75c14a37d605eaae06ba26f689f426a455b60afeed34f6ae54cfe39a9da6` |
+| Signed image | `omi.signed.bin`, 249,856 bytes |
+| Signed image SHA-256 | `1aa6e26349c3562c8fca6de46f478b543968d8d5456b3620d36dc06af6627103` |
+| Payload SHA-256 (image TLV) | `88496667cd6c6ea7f28bf103c2a92f5311aa1e0cf2447bf52cb4ea46e644affb` |
+| Toolchain | nRF Connect SDK `v2.9.0`, sysbuild, MCUboot, RSA-2048 PSS |
+| Container | `ghcr.io/zephyrproject-rtos/ci:v0.26.13@sha256:b0ac6334d1926cd0971a0a444f7adc6dd020e88ee3ce865aa070b6475a3ac4eb` |
+| Package contents | `manifest.json` + one image at index 0, board `omi` — **no radio core** |
+
+#### What this version contains
+
+Two changes against `0.0.5`, and nothing else — no other commit touches firmware
+sources in the range:
+
+- **Stealth Mode.** A persistent `omi/stealth` setting of its own, kept in the
+  device's flash beside `dim_ratio` and `mic_gain`, guarding the once-a-second
+  status display. While it is on, the device stops saying whether it is
+  connected, disconnected or charging. The short signals are untouched — the
+  boot pulse and the ready fade run before that loop exists, and the existing
+  error blinks are raised during initialisation.
+- **A one-off blue signal, deliberately separate.** `19B10014` holds the stored
+  state; `19B10015` is a write-only instruction to show one second of blue,
+  once, on its own timer. Two characteristics because they are two kinds of
+  thing: a momentary instruction must never be able to change what the device
+  does for the rest of the week. The signal is never a side effect of
+  connecting — the firmware cannot tell a deliberate open from an automatic
+  reconnect, so the app asks for it.
+
+Haptics, the button, the microphone and what the device records are unchanged.
+`dim_ratio` is unchanged: silence and brightness are separate settings, and the
+hardware acceptance confirmed the light returns at its previous brightness.
+
+#### The hardware acceptance
+
+    Manual validation device:
+    Samsung Galaxy A25 (SM-A256B)
+
+Serial `RZCXC034X1R`, pendant `D2:5A:68:29:1B:95`, 2026-09-20. The artefact was
+installed **over Orb's own automatic update path** from the bundled candidate —
+not over nRF Connect, and not from a local build. The device reported `0.0.6`
+afterwards, read fresh from the device.
+
+| | Point | Result |
+|---|---|---|
+| 0 | Firmware revision reads `0.0.6` | **PASS** |
+| A | Stealth on: device state confirmed, pendant goes dark while charging | **PASS** |
+| B | Link lost: no standing red, no repeated blink; Orb's own mark still turns red | **PASS** |
+| C | Automatic reconnect: no blue signal | **PASS** |
+| D | Deliberate app open: exactly one second of blue, once — on return and on restart | **PASS** |
+| E | Device restart: boot and ready signals kept, stealth survives, no standing blue afterwards | **PASS** |
+| F | Charging: no standing glow, no repeated blink, charging itself unaffected | **PASS** |
+| G | Recording, button and haptics unchanged, including the alarm on a link lost mid-recording and its acknowledgement by one press | **PASS** |
+| H | App restart: the wish survives and is reconciled with the device | **PASS** |
+| I | Stealth off: ordinary LED behaviour returns immediately, at the previous brightness | **PASS** |
+| J | Swapping to a second Shard | **NOT EXECUTABLE** — no second device exists. Not claimed as passed |
+
+**One observation left open.** During C, shortly after the first reconnect, a
+single one-byte write went to the device. Android's GATT log names no
+characteristic, so it could not be attributed. Nothing visible followed from it,
+and E disproved the worrying reading — a device that had lost the setting would
+have come back showing a standing blue, and it did not. It is recorded here
+because it was seen, not because it is explained.
+
+### 0.0.5 — **`RELEASE COMPLETE`**
+
+Published 2026-09-20, tag `shard-cv1-v0.0.5` on
+`d07784fc04a226b708958a0bd7e6d066aa50d07e`, from the draft CI built on
+2026-08-22. It carries the alarm on a connection lost during a recording, and
+that alarm is part of `0.0.6` as well.
+
+Release: https://github.com/demcoderseinnachbar/omi/releases/tag/shard-cv1-v0.0.5
+
+**It sat as an unpublished draft for a month, and this document is the reason it
+went unnoticed.** The hardware acceptance had passed on 2026-08-22 — six
+contract points on a Samsung Galaxy A25 against pendant `E7:2D:36:5A:B1:D3`,
+including a controlled fifteen-minute run — and §5 steps 8 to 15 were simply
+never carried out. No blocker was recorded anywhere, because there was no entry
+here to record it in: the Status section ended at `0.0.4` and the header still
+said `0.0.4` was current. The only note that anything was outstanding lived in
+the Orb repository, which is not where somebody looks up the state of a firmware
+release.
+
+**A version therefore gets its Status entry when its release completes, and the
+header above moves with it.** That is what makes an unfinished release visible
+in the one place that is read.
 
 ### 0.0.4 — **`RELEASE COMPLETE`**
 
