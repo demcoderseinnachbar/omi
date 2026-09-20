@@ -5,11 +5,7 @@
 #include <zephyr/kernel.h>
 
 // LED color enum for PWM control
-typedef enum {
-    LED_RED,
-    LED_GREEN,
-    LED_BLUE
-} led_color_t;
+typedef enum { LED_RED, LED_GREEN, LED_BLUE } led_color_t;
 
 /**
  * @brief Initialize the LEDs
