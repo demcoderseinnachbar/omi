@@ -51,7 +51,7 @@ The ten questions this file exists to answer:
 |---|---|---|
 | `CONFIG_BT_DEVICE_NAME` | `Omi` | `Shard` |
 | `CONFIG_BT_DIS_MODEL` | `Omi CV 1` | `Shard CV 1` |
-| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | `0.0.6` |
+| `CONFIG_BT_DIS_FW_REV_STR` | `3.0.21` | derived from `VERSION` (below) |
 
 The version restarts at `0.0.x` deliberately. It is not a continuation of the
 Omi version line — it is a different product identity with its own history, and
@@ -661,6 +661,127 @@ new version.
 ---
 
 ## Status
+
+### 0.0.7 — **IN PREPARATION** — not built by CI, no candidate, no tag, not published
+
+**Only step 1 and step 2 of §5 are done, on `feat/shard-0.0.7-incognito`.** The
+change has not reached `main`, so no candidate run has built it and no draft
+exists. The local build below is
+evidence that the source builds and that the gates pass — it is **not** the
+candidate, and its bytes will never be released: MCUboot signs with RSA-PSS, so
+the CI build of the same source will carry a different image and archive hash.
+
+| Step | State |
+|---|---|
+| 1 Firmware change | **done** on the feature branch |
+| 2 `VERSION` raised to `0.0.7` | **done** on the feature branch |
+| 3 Built by CI from `main` | open — needs the pull request merged |
+| 4 Candidate assembled (draft) | open |
+| 5 Orb points at exactly this artefact | open — waits for step 4 |
+| 6 Orb's gates | open for the bundled package; Orb's app change itself is tested |
+| 7 Accepted on hardware | open — `Samsung Galaxy A25 (SM-A256B)`, H0–H12 of the Orb plan |
+| 8–15 Tag, publish, verify | open |
+
+#### What this version changes
+
+One change against `0.0.6`, and nothing else:
+
+- **Stealth lasts for one session of the device.** It is held in RAM only. Every
+  boot starts with it off — after switching off, an empty battery, a firmware
+  update or any other reset — and a BLE write changes this session and is never
+  written to flash. A lost link does not end it; the device does not restart
+  for that. The record `0.0.6` left under `omi/stealth` is recognised at load
+  and dropped unread: not read, because that would bring back a silence nobody
+  chose in this session; not erased, because nothing can read it any more and
+  erasing it would be one more flash write at boot on hardware without a cable.
+  **The key `omi/stealth` is retired and never to be used again.** Product
+  decision of 28 October 2026, ADR-0051 in the Orb repository.
+
+`19B10014` keeps its UUID, its length, its values and its read/write
+properties; only its meaning changes, from *stored* to *this session*.
+`19B10015`, `OMI_FEATURE_STEALTH`, the status display's own logic, haptics, the
+button, the microphone, `dim_ratio` and `mic_gain` are unchanged.
+
+| File | Change |
+|---|---|
+| `omi/src/settings.c` | `app_settings_set_stealth()` replaces `app_settings_save_stealth()` and writes RAM only; the `stealth` branch of the load handler recognises and ignores the retired key |
+| `omi/src/lib/core/settings.h` | the declaration and its documentation |
+| `omi/src/lib/core/transport.c` | the write handler calls the new function; the save-failure branch is gone because nothing is saved |
+| `omi/VERSION` | `0.0.7` |
+| `tests/settings_stealth/` | new `native_sim` ztest, the same pattern as `tests/haptic` |
+| `.github/workflows/firmware_build_check.yml` | runs it beside `tests/haptic` |
+
+#### Checked locally, on 28 October 2026
+
+In the pinned container `ghcr.io/zephyrproject-rtos/ci:v0.26.13@sha256:b0ac6334…`,
+NCS `v2.9.0`, with the SDK workspace mounted read-only:
+
+| Check | Result |
+|---|---|
+| `tests/settings_stealth` | **6 / 6 pass** — boot starts off; on and off; nothing reaches storage and a restart ends it; the `0.0.6` record is ignored and not erased; the retired key is accepted where an unknown one is refused with `-ENOENT`; `dim_ratio` and `mic_gain` load, save and survive a restart |
+| the same test against two deliberate regressions | **fails both** — a set that saves to flash (2 failures), a load that reads the old record (3 failures) |
+| `tests/haptic` | 19 / 19 pass, unchanged |
+| CI script self-tests (`scripts/ci`, `unittest`) | 106 pass |
+| `version_gate.check()` on the changed paths | passes with `0.0.6+0 -> 0.0.7+0`; refuses the same change without the bump |
+| `clang-format --dry-run --Werror` (18.1.5) on the changed C files | clean |
+| application-core build (`omi/nrf5340/cpuapp`, sysbuild) | **success**; DIS `CONFIG_BT_DIS_FW_REV_STR="0.0.7"`, `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="0.0.7+0"` |
+| `partition_gate.py` on the generated table | `settings_storage 0xf8000/0x2000`, `littlefs_storage 0xfa000/0x6000` — where shipped hardware has them |
+| `make_shard_release.py` into a scratch directory | package `Shard_CV1_appcore_v0.0.7.zip`, 250,559 bytes, one application image, `sha256sum -c` OK |
+
+**The local package is not the candidate.** Its archive and image hashes are of
+no use to anybody and are deliberately not written down here. Its **payload**
+hash, `21aa37d8ee2c10cd8fe7b39cc5dc4d7f530895a0ef29a936b5d86ee48ed4fb6a`, is
+recorded for one purpose: the CI candidate built from the same source should
+carry the same one, and a different value would be a question to answer before
+step 5. Everything in this table is repeated by CI in step 3, and only that run
+counts.
+
+#### Rollback
+
+**There is none on the device, and there was none before.** The bootloader
+refuses any image lower than the one installed (§1) and cannot be replaced over
+the air, so a Shard on `0.0.7` cannot be brought back to `0.0.6`. A fault in
+`0.0.7` is corrected forward, by `0.0.8`. An Orb app that bundles `0.0.6` does
+not try: `0.0.7` is not in its release line, so it reports unknown firmware and
+writes nothing — but it still writes its own stored stealth wish back after
+every restart of the device, which is why the Orb app that stops doing so has to
+ship with this firmware, never after it.
+
+#### Release body — draft, not approved
+
+Written for step 10. **Not approved, and not to be published as it stands**: the
+three hashes come from the candidate's `RELEASE_MANIFEST.md` and do not exist
+yet, and the hardware sentence describes an acceptance that has not happened.
+Both are marked.
+
+```markdown
+Shard CV 1 — firmware 0.0.7
+
+App core only, from NCS 2.9.0 with sysbuild and MCUboot. [Hardware acceptance:
+to be written from the recorded run — device, path and result.]
+
+What it changes against 0.0.6:
+
+- Stealth Mode now lasts for one session of the device. Silencing the status
+  light still takes effect at once and still survives a lost Bluetooth link,
+  but it is no longer stored: after the device is switched off, runs flat, is
+  updated or restarts for any other reason, its light behaves normally again.
+  A device that was silenced when it receives this update comes back with its
+  light on.
+- Nothing else changes: the stealth characteristic keeps its UUID and format,
+  the one-off blue signal, haptics, the button, recording, the microphone gain
+  and the dim ratio are as they were.
+
+This build is consumed by the Orb app as a bundled asset. It is not served by
+the Omi firmware endpoint and is not offered to Omi users.
+
+SHA-256 (archive) [from RELEASE_MANIFEST.md]
+SHA-256 (image)   [from RELEASE_MANIFEST.md]
+SHA-256 (payload) [from RELEASE_MANIFEST.md]
+
+Only the payload hash survives a rebuild — MCUboot signs with RSA-PSS and its
+salt is random.
+```
 
 ### 0.0.6 — **`RELEASE COMPLETE`**
 

@@ -616,10 +616,8 @@ static ssize_t settings_stealth_write_handler(struct bt_conn *conn,
     uint8_t enabled = ((uint8_t *) buf)[0] ? 1U : 0U;
 
     LOG_INF("Received new stealth setting: %u", enabled);
-    int err = app_settings_save_stealth(enabled);
-    if (err) {
-        LOG_ERR("Failed to save stealth setting: %d", err);
-    }
+    /* For this session only; nothing is written to flash (0.0.7). */
+    app_settings_set_stealth(enabled);
 
     /*
      * Applied at once rather than at the next tick of the status loop.

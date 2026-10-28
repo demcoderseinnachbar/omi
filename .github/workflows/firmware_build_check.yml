@@ -136,3 +136,26 @@ jobs:
                 -d /tmp/haptic-build --pristine always
               /tmp/haptic-build/haptic/zephyr/zephyr.exe
             '
+
+      # The same kind of host test, for a rule that has to hold across a
+      # restart: stealth lasts for one session and is never written to flash,
+      # and the record 0.0.6 left behind does nothing. The settings subsystem is
+      # Zephyr's own; only the storage under it is the test's, so every write
+      # can be counted.
+      - name: Check that stealth lasts for one session
+        env:
+          CI_IMAGE: ${{ steps.firmware.outputs.image }}
+          NCS: ${{ steps.firmware.outputs.ncs }}
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/omi/firmware:/omi/firmware" \
+            -e CMAKE_PREFIX_PATH=/opt/toolchains \
+            -e NCS="$NCS" \
+            "$CI_IMAGE" \
+            bash -euo pipefail -c '
+              git config --global --add safe.directory "*"
+              cd "/omi/firmware/$NCS"
+              west build -b native_sim /omi/firmware/tests/settings_stealth \
+                -d /tmp/settings-stealth-build --pristine always
+              /tmp/settings-stealth-build/settings_stealth/zephyr/zephyr.exe
+            '
