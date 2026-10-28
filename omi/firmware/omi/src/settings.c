@@ -9,8 +9,9 @@ LOG_MODULE_REGISTER(app_settings, CONFIG_LOG_DEFAULT_LEVEL);
 // Default values if not found in flash
 #define DEFAULT_DIM_LIGHT_RATIO 50
 #define DEFAULT_MIC_GAIN 6
-/* Stealth is off unless somebody asks for it: a device out of the box behaves
- * the way its manual describes. */
+/* Stealth is off unless somebody asks for it during this session: a device out
+ * of the box, and every device after a restart, behaves the way its manual
+ * describes. */
 #define DEFAULT_STEALTH 0
 
 // In-memory cache for the settings
@@ -18,7 +19,11 @@ static uint8_t dim_light_ratio = DEFAULT_DIM_LIGHT_RATIO;
 static uint8_t mic_gain = DEFAULT_MIC_GAIN;
 /* Its own setting, deliberately not a dim_ratio of zero. How bright the LED is
  * and whether it may speak at all are two different questions, and only one of
- * them is a promise to the person wearing it. */
+ * them is a promise to the person wearing it.
+ *
+ * Held in RAM and nowhere else (0.0.7). Silence lasts for the session it was
+ * asked for in: a lost link or a restarted app leaves it alone, a restart of
+ * the device ends it. */
 static uint8_t stealth = DEFAULT_STEALTH;
 static struct rtc_time rtc_timestamp = {0};
 static uint64_t rtc_epoch = 0;
@@ -60,16 +65,22 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
         return rc;
     }
 
+    /*
+     * Retired. 0.0.6 kept stealth in flash under this key, so a device that was
+     * silenced when it was updated still carries the value. It is recognised
+     * and dropped unread: reading it would bring back a silence nobody chose in
+     * this session, and leaving the key unclaimed would make every boot log a
+     * set-value failure for a record that is no fault at all.
+     *
+     * Not deleted either. Nothing can read it any more -- this firmware ignores
+     * it and the bootloader refuses 0.0.6 -- and erasing it would be one more
+     * flash write at boot on a device that has no cable.
+     *
+     * The key is never to be used again, for this or any other setting.
+     */
     if (settings_name_steq(name, "stealth", &next) && !next) {
-        if (len != sizeof(stealth)) {
-            return -EINVAL;
-        }
-        rc = read_cb(cb_arg, &stealth, sizeof(stealth));
-        if (rc >= 0) {
-            LOG_INF("Loaded stealth: %u", stealth);
-            return 0;
-        }
-        return rc;
+        LOG_INF("Ignored the retired stealth record");
+        return 0;
     }
 
     if (settings_name_steq(name, "rtc_timestamp", &next) && !next) {
@@ -277,16 +288,10 @@ uint8_t app_settings_get_mic_gain(void)
     return mic_gain;
 }
 
-int app_settings_save_stealth(uint8_t enabled)
+void app_settings_set_stealth(uint8_t enabled)
 {
     stealth = enabled ? 1U : 0U;
-    int err = settings_save_one("omi/stealth", &stealth, sizeof(stealth));
-    if (err) {
-        LOG_ERR("Failed to save stealth (err %d)", err);
-    } else {
-        LOG_INF("Saved stealth: %u", stealth);
-    }
-    return err;
+    LOG_INF("Stealth for this session: %u", stealth);
 }
 
 uint8_t app_settings_get_stealth(void)

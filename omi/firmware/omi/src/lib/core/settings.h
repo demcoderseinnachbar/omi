@@ -44,7 +44,7 @@ int app_settings_save_mic_gain(uint8_t new_gain);
 uint8_t app_settings_get_mic_gain(void);
 
 /**
- * @brief Save the stealth setting.
+ * @brief Set the stealth state for this session.
  *
  * Stealth silences the persistent status light: while it is on, the device
  * stops saying whether it is connected, disconnected or charging. It does not
@@ -53,13 +53,17 @@ uint8_t app_settings_get_mic_gain(void);
  * button or anything the device records.
  *
  * It is a setting of its own and not a dim ratio of zero: brightness and
- * silence are different questions, and this one survives a restart because the
- * person who asked for it is still wearing the device afterwards.
+ * silence are different questions.
+ *
+ * **Held in RAM only, never written to flash** (0.0.7). It lasts until the
+ * device restarts — switched off, battery empty, updated or reset — and every
+ * boot starts with it off. A lost link or a restarted phone app does not end
+ * it. Until 0.0.6 it was stored and survived a restart; the record that
+ * version left behind is ignored, and its key is retired.
  *
  * @param enabled Non-zero to silence the status light, zero to restore it.
- * @return 0 on success, negative error code otherwise.
  */
-int app_settings_save_stealth(uint8_t enabled);
+void app_settings_set_stealth(uint8_t enabled);
 
 /**
  * @brief Get the current stealth setting.
