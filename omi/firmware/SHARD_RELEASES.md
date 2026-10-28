@@ -41,7 +41,7 @@ The ten questions this file exists to answer:
 | 9 | What is the single source of truth? | The GitHub release. | this section |
 | 10 | How is an RC or a rebuild kept out? | Never trust a filename. Full path, hash before upload, hash the download after. | [§5](#never-publish-an-rc-or-a-rebuild) |
 
-**The current release is `0.0.6`.** `0.0.7` is a candidate accepted on hardware, not yet published. See [Status](#status).
+**The current release is `0.0.7`.** See [Status](#status).
 
 ---
 
@@ -662,25 +662,38 @@ new version.
 
 ## Status
 
-### 0.0.7 — **CANDIDATE ACCEPTED ON HARDWARE** — not tagged, not published
+### 0.0.7 — **`RELEASE COMPLETE`**
 
-**Steps 1 to 7 of §5 are done; steps 8 to 15 are not.** The candidate is the CI
-draft below, accepted on hardware through Orb's own update path. No tag exists
-and nothing is published; both wait for their own approval.
+Every step of §5 is done and verified against what was actually published, not
+against the local copies. Nothing follows.
 
 | Step | State |
 |---|---|
 | 1 Firmware change | **done** — `281aecb574`, PR #17 |
 | 2 `VERSION` raised to `0.0.7` | **done** — same commit |
 | 3 Built by CI from `main` | **done** — merge `cdc718092cf4a85555bcf8dc8d4a590fc649c57a`, run `40672966219` (*Shard release candidate*), success; *Firmware build check* on the same commit, success — `settings_stealth` 6 / 6, `haptic` 19 / 19, partition gate |
-| 4 Candidate assembled (draft) | **done** — draft *Shard CV1 0.0.7*, 2026-10-28T10:38:49Z, three files, no tag |
-| 5 Orb points at exactly this artefact | **done** — Orb `9213c02` on `feat/1.3.6-incognito-focus`, bundled package byte-identical to the downloaded draft (`cmp`) |
+| 4 Candidate assembled (draft) | **done** — draft *Shard CV1 0.0.7*, 2026-10-28T10:38:49Z, three files |
+| 5 Orb points at exactly this artefact | **done** — Orb `9213c02` on `feat/1.3.6-incognito-focus`, bundled package byte-identical to the published download (`cmp`) |
 | 6 Orb's gates | **done** — Orb CI green on that branch, last on `cb9e65a` (run `40692772584`) |
 | 7 Accepted on hardware | **done, with limits** — see *The hardware acceptance* |
-| 8 Release commit fixed | ready — `cdc718092cf4a85555bcf8dc8d4a590fc649c57a`, named by the draft's manifest |
-| 9 Annotated tag `shard-cv1-v0.0.7` | **open** — not created |
-| 10 Publish the draft | **open** — body below, not approved |
-| 11–15 Attach nothing, verify download, `RELEASE COMPLETE` | open |
+| 8 Release commit fixed | **done** — `cdc718092cf4a85555bcf8dc8d4a590fc649c57a`, named by the manifest the build itself wrote |
+| 9 Annotated tag `shard-cv1-v0.0.7` | **done**, dereferencing to `cdc718092c…` — checked as `^{commit}`, not by the tag object's own id |
+| Tag pushed | **done** — verified remotely, `refs/tags/shard-cv1-v0.0.7^{}` = `cdc718092c…` |
+| 10 GitHub release `Shard CV1 0.0.7` | **done** — published `2026-10-28T13:50:58Z`, not a draft, not a pre-release, with the approved body verbatim |
+| 11 Nothing attached, nothing replaced | **done** — the three assets keep the build's timestamps (2026-10-28T10:38:50Z) |
+| `Shard_CV1_appcore_v0.0.7.zip` attached | **done** — verified `4740aed4…` |
+| `RELEASE_MANIFEST.md` attached | **done** — verified `663c9315…` |
+| `SHA256SUMS` attached | **done** — verified `4f4c50ba…` |
+| 12–13 `sha256sum -c SHA256SUMS` on the download | **done** — both `OK`; image `afc72c26…`, `imgtool verify` *Image was correctly validated*, `0.0.7+0` |
+| 14 Orb delivery copy identical to the published package | **done** — byte-for-byte, 0 differing bytes |
+| 15 | **`RELEASE COMPLETE`** |
+
+Release: https://github.com/demcoderseinnachbar/omi/releases/tag/shard-cv1-v0.0.7
+
+The published files were downloaded back into a fresh directory and hashed
+there; the byte comparison against Orb's bundled copy was made on that download.
+The tag is on the merge commit the manifest names and not on a branch head.
+**The tag is never moved.**
 
 #### The artefact this refers to
 
@@ -689,7 +702,7 @@ and nothing is published; both wait for their own approval.
 | Product | Shard CV 1 |
 | Version | `0.0.7`, image `0.0.7+0` |
 | Firmware commit | `cdc718092cf4a85555bcf8dc8d4a590fc649c57a` |
-| Tag | `shard-cv1-v0.0.7` — **not yet created** |
+| Tag | `shard-cv1-v0.0.7` |
 | Archive | `Shard_CV1_appcore_v0.0.7.zip`, 250,559 bytes |
 | Archive SHA-256 | `4740aed48c667f89f10300e868caaf7fe909a72f2dcc227e9fcde4332f3df100` |
 | Signed image | `omi.signed.bin`, 249,836 bytes |
@@ -802,11 +815,11 @@ writes nothing — but it still writes its own stored stealth wish back after
 every restart of the device, which is why the Orb app that stops doing so has to
 ship with this firmware, never after it.
 
-#### Release body — draft, not approved
+#### Release body — approved and published
 
 Written for step 10 from the recorded acceptance and the draft's manifest.
-**Not approved**: it is published only after a person has read and released
-exactly this text, and nothing is added to it on the way out.
+**Approved by the product owner on 2026-10-28 and published verbatim** as the
+release body; nothing was added on the way out.
 
 ```markdown
 Shard CV 1 — firmware 0.0.7
